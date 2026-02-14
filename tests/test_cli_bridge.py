@@ -161,24 +161,27 @@ class TestCustomCLI:
             )
             await asyncio.sleep(0.01)
 
-            # Now feed the response so the future resolves.
+            # Extract the task_id that was written to stdin.
+            calls = mock_proc.stdin.write.call_args_list
+            assert len(calls) >= 1
+            written = calls[0][0][0].decode()
+            task_msg = json.loads(written)
+            actual_task_id = task_msg["id"]
+
+            # Now feed the response with the actual task ID so the future resolves.
             stdout.feed(
                 json.dumps({
                     "type": "result",
-                    "task_id": "t_001",
+                    "task_id": actual_task_id,
                     "content": "done!",
                 }).encode() + b"\n"
             )
 
             await asyncio.wait_for(task, timeout=2.0)
 
-        # Verify task was written to stdin.
-        calls = mock_proc.stdin.write.call_args_list
-        assert len(calls) >= 1
-        written = calls[0][0][0].decode()
-        task_msg = json.loads(written)
+        # Verify task was written correctly.
         assert task_msg["type"] == "task"
-        assert task_msg["id"] == "t_001"
+        assert actual_task_id.startswith("t_")  # UUIDs now
         assert task_msg["from"] == "user"
         assert task_msg["content"] == "do something"
 
@@ -207,10 +210,17 @@ class TestCustomCLI:
             )
             await asyncio.sleep(0.01)
 
+            # Extract the task_id from stdin.
+            calls = mock_proc.stdin.write.call_args_list
+            assert len(calls) >= 1
+            written = calls[0][0][0].decode()
+            task_msg = json.loads(written)
+            actual_task_id = task_msg["id"]
+
             stdout.feed(
                 json.dumps({
                     "type": "result",
-                    "task_id": "t_001",
+                    "task_id": actual_task_id,
                     "content": "task complete",
                 }).encode() + b"\n"
             )
@@ -324,7 +334,7 @@ class TestTaskTracking:
     """Verify task IDs are generated and tracked correctly."""
 
     async def test_task_ids_increment(self, tmp_path: Path) -> None:
-        """Each task gets an incrementing ID."""
+        """Each task gets a unique ID (UUIDs)."""
         router, recorder = _make_router(tmp_path)
         bridge = _make_bridge(router, recorder, command="cat")
 
@@ -347,7 +357,9 @@ class TestTaskTracking:
                 )
                 await asyncio.sleep(0.01)
 
-                tid = f"t_{i:03d}"
+                # Extract the actual task_id from the written message.
+                msg = json.loads(written_messages[-1].decode())
+                tid = msg["id"]
                 payload = json.dumps({
                     "type": "result",
                     "task_id": tid,
@@ -362,7 +374,10 @@ class TestTaskTracking:
             if msg.get("type") == "task":
                 task_ids.append(msg["id"])
 
-        assert task_ids == ["t_001", "t_002", "t_003"]
+        # Verify we got 3 unique task IDs with the expected prefix.
+        assert len(task_ids) == 3
+        assert all(tid.startswith("t_") for tid in task_ids)
+        assert len(set(task_ids)) == 3  # All unique
         stdout.close()
         recorder.close()
 
@@ -465,6 +480,13 @@ class TestMessageRouting:
             )
             await asyncio.sleep(0.01)
 
+            # Extract the task_id from stdin.
+            calls = mock_proc.stdin.write.call_args_list
+            assert len(calls) >= 1
+            written = calls[0][0][0].decode()
+            task_msg = json.loads(written)
+            actual_task_id = task_msg["id"]
+
             # Subprocess sends a message to agent-b.
             stdout.feed(
                 json.dumps({
@@ -479,7 +501,7 @@ class TestMessageRouting:
             stdout.feed(
                 json.dumps({
                     "type": "result",
-                    "task_id": "t_001",
+                    "task_id": actual_task_id,
                     "content": "done",
                 }).encode() + b"\n"
             )
@@ -514,6 +536,13 @@ class TestMessageRouting:
             )
             await asyncio.sleep(0.01)
 
+            # Extract the task_id from stdin.
+            calls = mock_proc.stdin.write.call_args_list
+            assert len(calls) >= 1
+            written = calls[0][0][0].decode()
+            task_msg = json.loads(written)
+            actual_task_id = task_msg["id"]
+
             # Subprocess tries to message a non-peer.
             stdout.feed(
                 json.dumps({
@@ -528,7 +557,7 @@ class TestMessageRouting:
             stdout.feed(
                 json.dumps({
                     "type": "result",
-                    "task_id": "t_001",
+                    "task_id": actual_task_id,
                     "content": "done",
                 }).encode() + b"\n"
             )
@@ -566,6 +595,13 @@ class TestStatusEvents:
             )
             await asyncio.sleep(0.01)
 
+            # Extract the task_id from stdin.
+            calls = mock_proc.stdin.write.call_args_list
+            assert len(calls) >= 1
+            written = calls[0][0][0].decode()
+            task_msg = json.loads(written)
+            actual_task_id = task_msg["id"]
+
             stdout.feed(
                 json.dumps({
                     "type": "status",
@@ -577,7 +613,7 @@ class TestStatusEvents:
             stdout.feed(
                 json.dumps({
                     "type": "result",
-                    "task_id": "t_001",
+                    "task_id": actual_task_id,
                     "content": "done",
                 }).encode() + b"\n"
             )

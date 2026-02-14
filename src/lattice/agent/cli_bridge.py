@@ -75,8 +75,9 @@ class CLIBridge:
         self._pending_tasks: dict[str, asyncio.Future[str]] = {}
 
         # Claude adapter: message queue & conversation state.
-        self._message_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._message_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=100)
         self._claude_busy = False
+        self._claude_busy_lock = asyncio.Lock()
         self._claude_conversation_id: str | None = None
 
     # ------------------------------------------------------------------ #
@@ -166,19 +167,33 @@ class CLIBridge:
             await self.start()
 
         if self._cli_type == "claude":
-            # Check if Claude is currently busy.
-            if self._claude_busy:
-                # Queue the message and show feedback.
-                await self._message_queue.put((from_agent, content))
-                if self._on_response:
-                    self._on_response(f"[{self.name} is busy, message queued]")
-                logger.info(
-                    "%s: queued message from %s (queue size: %d)",
-                    self.name,
-                    from_agent,
-                    self._message_queue.qsize(),
-                )
-                return
+            # Atomically check busy state to prevent race conditions.
+            async with self._claude_busy_lock:
+                if self._claude_busy:
+                    # Check if queue has space before adding.
+                    if self._message_queue.full():
+                        error_msg = f"Message queue full (100 messages) — rejecting message from {from_agent}"
+                        logger.error("%s: %s", self.name, error_msg)
+                        self._recorder.record(
+                            ErrorEvent(
+                                ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                            )
+                        )
+                        if self._on_response:
+                            self._on_response(f"[{self.name} queue full, message rejected]")
+                        return
+
+                    # Queue the message and show feedback.
+                    await self._message_queue.put((from_agent, content))
+                    if self._on_response:
+                        self._on_response(f"[{self.name} is busy, message queued]")
+                    logger.info(
+                        "%s: queued message from %s (queue size: %d)",
+                        self.name,
+                        from_agent,
+                        self._message_queue.qsize(),
+                    )
+                    return
 
             # Not busy — process immediately and handle queue afterwards.
             self._recorder.record(
@@ -216,7 +231,12 @@ class CLIBridge:
             is_followup: If True, use --continue to preserve conversation context.
         """
         self._claude_busy = True
-        prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
+
+        # Include role only in the first message; follow-ups use the preserved conversation.
+        if is_followup:
+            prompt = f"Task from {from_agent}: {content}"
+        else:
+            prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
 
         try:
             cmd_args = ["claude", "-p", prompt, "--output-format", "json"]
@@ -256,7 +276,8 @@ class CLIBridge:
             return
 
         if proc.returncode != 0:
-            stderr_text = stderr_bytes.decode(errors="replace").strip()[:500]
+            # Truncate bytes before decode to prevent excessive memory use with invalid UTF-8.
+            stderr_text = stderr_bytes[:2048].decode(errors="replace").strip()[:500]
             error_msg = f"Claude CLI exited with code {proc.returncode}: {stderr_text}"
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
@@ -281,7 +302,16 @@ class CLIBridge:
 
         # Store conversation ID for future --continue use.
         if isinstance(result, dict) and "conversation_id" in result:
-            self._claude_conversation_id = str(result["conversation_id"])
+            conv_id = str(result["conversation_id"])
+            # Validate: alphanumeric + hyphens only to prevent injection.
+            if conv_id and conv_id.replace("-", "").replace("_", "").isalnum():
+                self._claude_conversation_id = conv_id
+            else:
+                logger.warning(
+                    "%s: invalid conversation_id format '%s', ignoring",
+                    self.name,
+                    conv_id[:100],
+                )
 
         # Extract the response content.
         if isinstance(result, dict):
@@ -310,6 +340,10 @@ class CLIBridge:
                 from_agent,
                 self._message_queue.qsize(),
             )
+
+            # Show user feedback when starting a queued message.
+            if self._on_response:
+                self._on_response(f"[{self.name} processing queued message from {from_agent}]")
 
             # Record start/done events for each queued task.
             self._recorder.record(

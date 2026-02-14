@@ -1,6 +1,8 @@
 # Lattice
 
-Declarative dev-environment orchestrator.
+Declarative multi-agent orchestration CLI. Define agent teams in YAML, run them with `lattice up`, observe with `lattice watch`.
+
+![lattice watch TUI](docs/watch-tui.png)
 
 ## Install
 
