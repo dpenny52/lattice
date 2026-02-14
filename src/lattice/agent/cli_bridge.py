@@ -26,6 +26,9 @@ _SHUTDOWN_WAIT = 5.0
 #: Seconds to wait after SIGTERM before SIGKILL.
 _SIGTERM_WAIT = 3.0
 
+#: Maximum bytes per JSONL line from subprocess stdout (1 MB).
+_MAX_LINE_BYTES = 1_048_576
+
 
 class CLIBridge:
     """Agent that wraps a CLI subprocess with bidirectional JSONL.
@@ -99,7 +102,7 @@ class CLIBridge:
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
         self._started = True
         self._read_task = asyncio.create_task(self._read_loop())
@@ -210,7 +213,7 @@ class CLIBridge:
             return
 
         if proc.returncode != 0:
-            stderr_text = stderr_bytes.decode(errors="replace").strip()
+            stderr_text = stderr_bytes.decode(errors="replace").strip()[:500]
             error_msg = f"Claude CLI exited with code {proc.returncode}: {stderr_text}"
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
@@ -262,7 +265,7 @@ class CLIBridge:
         task_id = f"t_{self._task_counter:03d}"
 
         # Create a future for task completion.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
         self._pending_tasks[task_id] = future
 
@@ -315,6 +318,14 @@ class CLIBridge:
                 if not line:
                     # EOF -- subprocess has exited.
                     break
+
+                if len(line) > _MAX_LINE_BYTES:
+                    logger.warning(
+                        "%s: subprocess line exceeds %d bytes, skipping",
+                        self.name,
+                        _MAX_LINE_BYTES,
+                    )
+                    continue
 
                 line_str = line.decode(errors="replace").strip()
                 if not line_str:
@@ -370,6 +381,13 @@ class CLIBridge:
             to = str(msg.get("to", ""))
             content = str(msg.get("content", ""))
             if to and content:
+                if to not in self._peer_names:
+                    logger.warning(
+                        "%s: subprocess tried to message non-peer '%s' -- blocked",
+                        self.name,
+                        to,
+                    )
+                    return
                 try:
                     await self._router.send(self.name, to, content)
                 except Exception as exc:
@@ -383,7 +401,7 @@ class CLIBridge:
         elif msg_type == "result":
             task_id = str(msg.get("task_id", ""))
             content = str(msg.get("content", ""))
-            future = self._pending_tasks.get(task_id)
+            future = self._pending_tasks.pop(task_id, None)
             if future is not None and not future.done():
                 future.set_result(content)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -130,7 +131,7 @@ class TestCLIBridgeProtocol:
         router, recorder = _make_router(tmp_path)
         bridge = _make_bridge(router, recorder, cli_type="claude")
         assert hasattr(bridge, "handle_message")
-        assert asyncio.iscoroutinefunction(bridge.handle_message)
+        assert inspect.iscoroutinefunction(bridge.handle_message)
         recorder.close()
 
 
@@ -486,6 +487,54 @@ class TestMessageRouting:
 
         await asyncio.sleep(0.1)
         mock_peer.handle_message.assert_called_once_with("cli-agent", "hello from cli")
+        stdout.close()
+        recorder.close()
+
+    async def test_message_to_non_peer_blocked(self, tmp_path: Path) -> None:
+        """A subprocess cannot message agents outside its peer list."""
+        router, recorder = _make_router(tmp_path)
+        # peer_names defaults to ["user", "agent-b"] via _make_bridge
+        bridge = _make_bridge(router, recorder, command="echo", name="cli-agent")
+        router.register("cli-agent", bridge)
+
+        secret_agent = MagicMock()
+        secret_agent.handle_message = AsyncMock()
+        router.register("secret-agent", secret_agent)
+
+        stdout = MockAsyncStdout()
+        mock_proc = _make_mock_process(stdout)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            await bridge.start()
+            await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(
+                bridge.handle_message("user", "try to reach secret-agent")
+            )
+            await asyncio.sleep(0.01)
+
+            # Subprocess tries to message a non-peer.
+            stdout.feed(
+                json.dumps({
+                    "type": "message",
+                    "to": "secret-agent",
+                    "content": "sneaky message",
+                }).encode() + b"\n"
+            )
+            await asyncio.sleep(0.05)
+
+            # Finish the task.
+            stdout.feed(
+                json.dumps({
+                    "type": "result",
+                    "task_id": "t_001",
+                    "content": "done",
+                }).encode() + b"\n"
+            )
+            await asyncio.wait_for(task, timeout=2.0)
+
+        # The message to non-peer should NOT have been delivered.
+        secret_agent.handle_message.assert_not_called()
         stdout.close()
         recorder.close()
 
