@@ -295,6 +295,11 @@ class SessionMetadataPanel(Static):
 class EventDetailPanel(VerticalScroll):
     """Main panel showing the current event detail."""
 
+    # Strip inherited scroll bindings (up/down/pgup/pgdown/home/end) so all
+    # key events bubble up to the App, where our navigation bindings live.
+    # Mouse-wheel scrolling still works for long events.
+    BINDINGS = []
+
     event: reactive[SessionEvent | None] = reactive(None, recompose=True)
     verbose_data: reactive[dict[int, Any]] = reactive(dict)
 
@@ -468,6 +473,7 @@ class ReplayApp(App[None]):
     }
 
     #input-overlay {
+        display: none;
         dock: bottom;
         height: 3;
         background: $panel;
@@ -484,8 +490,8 @@ class ReplayApp(App[None]):
     BINDINGS = [
         Binding("j", "next_event", "Next"),
         Binding("k", "prev_event", "Previous"),
-        Binding("down", "next_event", "Next", show=False),
-        Binding("up", "prev_event", "Previous", show=False),
+        Binding("down", "next_event", "Next", show=False, priority=True),
+        Binding("up", "prev_event", "Previous", show=False, priority=True),
         Binding("g", "jump_to", "Jump to"),
         Binding("slash", "filter_search", "Filter"),
         Binding("a", "filter_agent", "Filter Agent"),
@@ -537,12 +543,11 @@ class ReplayApp(App[None]):
         event_panel = self.query_one("#event-detail-panel", EventDetailPanel)
         event_panel.verbose_data = self.verbose_data
 
-        # Hide input overlay initially
-        input_overlay = self.query_one("#input-overlay")
-        input_overlay.display = False
-
         # Show first event
         self._update_event_display()
+
+        # Focus the event panel so key events bubble up to app bindings.
+        event_panel.focus()
 
     def _update_event_display(self) -> None:
         """Update the event detail panel with the current event."""
@@ -626,9 +631,10 @@ class ReplayApp(App[None]):
         """Handle input submission."""
         value = event.value.strip()
 
-        # Hide input overlay
+        # Hide input overlay and return focus to event panel.
         input_overlay = self.query_one("#input-overlay")
         input_overlay.display = False
+        self.query_one("#event-detail-panel", EventDetailPanel).focus()
 
         if self.input_mode == "jump":
             self._handle_jump(value)
