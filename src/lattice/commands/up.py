@@ -15,6 +15,7 @@ from lattice.agent.llm_agent import LLMAgent
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
+from lattice.heartbeat import Heartbeat
 from lattice.router.router import Router
 from lattice.session.recorder import SessionRecorder
 
@@ -177,9 +178,24 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown_event.set)
 
+    # 7. Create heartbeat
+    heartbeat = Heartbeat(
+        interval=config.communication.heartbeat,
+        router=router,
+        entry_agent=entry,
+        recorder=recorder,
+        shutdown_event=shutdown_event,
+    )
+
+    # Wire heartbeat response checking into the entry agent's callback
+    if entry in agents:
+        _install_heartbeat_hook(agents[entry], heartbeat)
+
     try:
-        await _repl_loop(router, entry, all_agents, shutdown_event)
+        await _repl_loop(router, entry, all_agents, shutdown_event, heartbeat)
     finally:
+        await heartbeat.stop()
+
         # Shutdown CLI bridges.
         for bridge in cli_bridges.values():
             await bridge.shutdown()
@@ -204,15 +220,29 @@ async def _repl_loop(
     entry_agent: str,
     agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
     shutdown_event: asyncio.Event,
+    heartbeat: Heartbeat | None = None,
 ) -> None:
     """Read user input in a loop, dispatch to agents, handle commands."""
+    if heartbeat is not None:
+        await heartbeat.start()
+
     while not shutdown_event.is_set():
+        # Check if heartbeat signalled completion
+        if heartbeat is not None and heartbeat.done_flag:
+            shutdown_event.set()
+            break
+
         try:
+            if heartbeat is not None:
+                heartbeat.pause()
             line = await asyncio.get_event_loop().run_in_executor(
                 None, _read_input,
             )
         except EOFError:
             break
+        finally:
+            if heartbeat is not None:
+                heartbeat.resume()
 
         line = line.strip()
         if not line:
@@ -220,7 +250,9 @@ async def _repl_loop(
 
         # -- Slash commands ------------------------------------------------
         if line.startswith("/"):
-            should_break = _handle_command(line, agents)
+            should_break = await _handle_command(
+                line, agents, heartbeat,
+            )
             if should_break:
                 break
             continue
@@ -241,7 +273,7 @@ async def _repl_loop(
             await router.send("user", target, content)
             continue
 
-        # -- Plain text → entry agent --------------------------------------
+        # -- Plain text -> entry agent --------------------------------------
         await router.send("user", entry_agent, line)
 
 
@@ -250,8 +282,10 @@ def _read_input() -> str:
     return input("> ")
 
 
-def _handle_command(
-    line: str, agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+async def _handle_command(
+    line: str,
+    agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+    heartbeat: Heartbeat | None = None,
 ) -> bool:
     """Process a slash command. Returns ``True`` if the REPL should exit."""
     cmd = line.split()[0].lower()
@@ -260,7 +294,10 @@ def _handle_command(
         return True
 
     if cmd == "/status":
-        click.echo("Status: all agents idle")
+        if heartbeat is not None:
+            await heartbeat.fire()
+        else:
+            click.echo("Status: all agents idle")
         return False
 
     if cmd == "/agents":
@@ -294,3 +331,18 @@ def _make_response_callback(agent_name: str) -> Callable[[str], None]:
         click.echo(f"[{agent_name}] {content}")
 
     return _callback
+
+
+def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
+    """Wrap the entry agent's ``on_response`` callback to intercept heartbeat responses."""
+    if not hasattr(agent, "_on_response"):
+        return
+
+    original_callback = agent._on_response
+
+    def _hooked(content: str) -> None:
+        if original_callback is not None:
+            original_callback(content)
+        heartbeat.check_response(content)
+
+    agent._on_response = _hooked

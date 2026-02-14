@@ -645,7 +645,7 @@ class TestIntegrationWithUp:
             "formatter": mock_script,
         }
 
-        _handle_command("/agents", agents)  # type: ignore[arg-type]
+        await _handle_command("/agents", agents)  # type: ignore[arg-type]
 
         captured = capsys.readouterr()
         assert "researcher (llm)" in captured.out

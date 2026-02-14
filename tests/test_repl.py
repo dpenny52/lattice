@@ -226,33 +226,33 @@ class TestOnResponseCallback:
 
 
 class TestHandleCommand:
-    def test_done_returns_true(self) -> None:
-        assert _handle_command("/done", {}) is True
+    async def test_done_returns_true(self) -> None:
+        assert await _handle_command("/done", {}) is True
 
-    def test_status_returns_false(self, capsys: Any) -> None:
-        assert _handle_command("/status", {}) is False
+    async def test_status_returns_false(self, capsys: Any) -> None:
+        assert await _handle_command("/status", {}) is False
         captured = capsys.readouterr()
         assert "Status:" in captured.out
 
-    def test_agents_lists_agents(self, capsys: Any) -> None:
+    async def test_agents_lists_agents(self, capsys: Any) -> None:
         agents = {"researcher": MagicMock(), "writer": MagicMock()}
-        assert _handle_command("/agents", agents) is False
+        assert await _handle_command("/agents", agents) is False
         captured = capsys.readouterr()
         assert "researcher (llm)" in captured.out
         assert "writer (llm)" in captured.out
 
-    def test_unknown_command(self, capsys: Any) -> None:
-        assert _handle_command("/foobar", {}) is False
+    async def test_unknown_command(self, capsys: Any) -> None:
+        assert await _handle_command("/foobar", {}) is False
         captured = capsys.readouterr()
         assert "Unknown command: /foobar" in captured.out
 
-    def test_command_case_insensitive(self) -> None:
-        assert _handle_command("/Done", {}) is True
-        assert _handle_command("/DONE", {}) is True
+    async def test_command_case_insensitive(self) -> None:
+        assert await _handle_command("/Done", {}) is True
+        assert await _handle_command("/DONE", {}) is True
 
-    def test_command_with_trailing_text(self) -> None:
+    async def test_command_with_trailing_text(self) -> None:
         """Only the first word matters for commands."""
-        assert _handle_command("/done extra stuff", {}) is True
+        assert await _handle_command("/done extra stuff", {}) is True
 
 
 # ================================================================== #
