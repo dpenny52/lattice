@@ -66,21 +66,13 @@ def up(
     verbose: bool,
 ) -> None:
     """Start the agent team and enter the interactive REPL."""
-    if enable_watch:
-        click.echo(
-            "Error: Combined mode (--watch) is not yet implemented. "
-            "Use `lattice watch` in a separate terminal.",
-            err=True,
-        )
-        raise SystemExit(1)
-
     try:
         config = load_config(Path(config_file) if config_file else None)
     except ConfigError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc
 
-    asyncio.run(_run_session(config, verbose, loop_iterations))
+    asyncio.run(_run_session(config, verbose, loop_iterations, enable_watch))
 
 
 # ------------------------------------------------------------------ #
@@ -89,7 +81,7 @@ def up(
 
 
 async def _run_session(
-    config: LatticeConfig, verbose: bool, loop_iterations: int | None = None
+    config: LatticeConfig, verbose: bool, loop_iterations: int | None = None, enable_watch: bool = False
 ) -> None:
     """Wire up all components and run the REPL until shutdown."""
     # 1. Create recorder
@@ -196,9 +188,11 @@ async def _run_session(
     shutdown_event = asyncio.Event()
 
     # Handle Ctrl+C / SIGTERM gracefully
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown_event.set)
+    # In watch mode, let Textual handle Ctrl+C via its quit action
+    if not enable_watch:
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, shutdown_event.set)
 
     # 7. Create heartbeat
     heartbeat = Heartbeat(
@@ -229,6 +223,11 @@ async def _run_session(
                 heartbeat,
                 recorder,
                 loop_iterations,
+            )
+        elif enable_watch:
+            # Combined mode: run TUI with input bar
+            shutdown_reason = await _watch_mode(
+                router, entry, all_agents, shutdown_event, heartbeat, recorder,
             )
         else:
             shutdown_reason = await _repl_loop(
@@ -327,6 +326,76 @@ async def _repl_loop(
         reason = "ctrl_c"
 
     return reason
+
+
+async def _watch_mode(
+    router: Router,
+    entry_agent: str,
+    agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+    shutdown_event: asyncio.Event,
+    heartbeat: Heartbeat | None,
+    recorder: SessionRecorder,
+) -> str:
+    """Run the TUI with input bar instead of the REPL.
+
+    Returns the shutdown reason string.
+    """
+    from lattice.commands.watch import WatchApp
+
+    if heartbeat is not None:
+        await heartbeat.start()
+
+    # Create and run the TUI app
+    app = WatchApp(
+        session_file=recorder.session_file,
+        enable_input=True,
+        router=router,
+        entry_agent=entry_agent,
+        all_agents=agents,
+        heartbeat=heartbeat,
+        shutdown_event=shutdown_event,
+    )
+
+    # Run the app in a separate task so we can monitor heartbeat
+    app_task = asyncio.create_task(_run_tui_app(app))
+
+    reason = "user_shutdown"
+
+    # Monitor for completion or external shutdown
+    while not shutdown_event.is_set():
+        # Check if heartbeat signalled completion
+        if heartbeat is not None and heartbeat.done_flag:
+            reason = "complete"
+            shutdown_event.set()
+            break
+
+        # Check if TUI app exited
+        if app_task.done():
+            break
+
+        await asyncio.sleep(0.1)
+
+    # If TUI is still running, exit it gracefully
+    if not app_task.done():
+        app.exit()
+
+    # Wait for app to finish
+    try:
+        await app_task
+    except Exception:
+        pass
+
+    # If we got here because shutdown_event was set externally (Ctrl+C / SIGTERM)
+    # rather than via /done or heartbeat completion, mark as ctrl_c.
+    if shutdown_event.is_set() and reason == "user_shutdown":
+        reason = "ctrl_c"
+
+    return reason
+
+
+async def _run_tui_app(app: "WatchApp") -> None:  # type: ignore[name-defined]
+    """Run the Textual app in async context."""
+    await app.run_async()
 
 
 def _read_input() -> str:

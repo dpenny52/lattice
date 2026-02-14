@@ -140,7 +140,11 @@ class LatestPanel(VerticalScroll):
 
     def watch_events(self) -> None:
         """Auto-scroll to bottom when events change."""
-        self.call_after_refresh(self.scroll_end, animate=False)
+        # Double call_after_refresh: first waits for the recompose triggered
+        # by the reactive change, second waits for the new children to be laid out.
+        self.call_after_refresh(
+            lambda: self.call_after_refresh(self.scroll_end, animate=False)
+        )
 
     def add_event(self, event_str: str) -> None:
         """Add an event to the tail, maintaining max size."""
@@ -223,6 +227,14 @@ class WatchApp(App[None]):
         height: 100%;
     }
 
+    #input-bar {
+        dock: bottom;
+        height: 3;
+        background: $panel;
+        border-top: solid $primary;
+        padding: 0 1;
+    }
+
     #stats-footer {
         column-span: 2;
         dock: bottom;
@@ -230,13 +242,6 @@ class WatchApp(App[None]):
         background: $panel;
         border-top: solid $primary;
         padding: 1;
-    }
-
-    #input-bar {
-        dock: bottom;
-        height: 3;
-        background: $panel;
-        border-top: solid $primary;
     }
 
     .panel-title {
@@ -282,16 +287,31 @@ class WatchApp(App[None]):
         self,
         session_file: Path,
         enable_input: bool = False,
+        router: Any = None,
+        entry_agent: str | None = None,
+        all_agents: dict[str, Any] | None = None,
+        heartbeat: Any = None,
+        shutdown_event: asyncio.Event | None = None,
     ) -> None:
         """Initialize the watch app.
 
         Args:
             session_file: Path to the session JSONL file to watch
             enable_input: Whether to show the input bar (for combined mode)
+            router: Router instance (for combined mode)
+            entry_agent: Entry agent name (for combined mode)
+            all_agents: Dict of all agents (for combined mode commands)
+            heartbeat: Heartbeat monitor (for /status command)
+            shutdown_event: Shutdown event to signal graceful shutdown
         """
         super().__init__()
         self.session_file = session_file
         self.enable_input = enable_input
+        self.router = router
+        self.entry_agent = entry_agent
+        self.all_agents = all_agents or {}
+        self.heartbeat = heartbeat
+        self.shutdown_event = shutdown_event
 
         # State
         self.agents: dict[str, AgentState] = {}
@@ -316,13 +336,28 @@ class WatchApp(App[None]):
         yield LatestPanel(id="latest-panel")
         yield StatsFooter(id="stats-footer")
 
+        # Add input bar if enabled (combined mode)
+        if self.enable_input:
+            yield Input(placeholder="Type a message...", id="input-bar")
+
     def on_mount(self) -> None:
         """Start watching the session file."""
         self.watch_session_file()
 
+        # Focus input bar in combined mode
+        if self.enable_input:
+            self.set_focus(self.query_one("#input-bar", Input))
+
     def on_unmount(self) -> None:
         """Handle app shutdown."""
         self._stop_watching = True
+
+    def action_quit(self) -> None:
+        """Override quit action to trigger graceful shutdown in combined mode."""
+        if self.enable_input and self.shutdown_event is not None:
+            # Signal graceful shutdown instead of immediate exit
+            self.shutdown_event.set()
+        self.exit()
 
     @work(exclusive=True)
     async def watch_session_file(self) -> None:
@@ -507,7 +542,7 @@ class WatchApp(App[None]):
                 display_text += "..."
 
             self._add_event_line(
-                f"[green]CLI output[/green]: {agent_name}: {display_text}"
+                f"[green]{agent_name}[/green]: {display_text}"
             )
 
         elif event_type == "cli_tool_call":
@@ -582,6 +617,81 @@ class WatchApp(App[None]):
         # Update stats footer
         stats_footer = self.query_one("#stats-footer", StatsFooter)
         stats_footer.stats = self.stats
+
+    @on(Input.Submitted)
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle user input submission from the input bar."""
+        if not self.enable_input or self.router is None or self.entry_agent is None:
+            return
+
+        line = event.value.strip()
+        event.input.clear()
+
+        if not line:
+            return
+
+        # -- Slash commands ------------------------------------------------
+        if line.startswith("/"):
+            should_quit = await self._handle_command(line)
+            if should_quit:
+                if self.shutdown_event is not None:
+                    self.shutdown_event.set()
+                self.exit()
+            return
+
+        # -- @agent routing ------------------------------------------------
+        if line.startswith("@"):
+            parts = line.split(None, 1)
+            target = parts[0][1:]  # strip the @
+            content = parts[1] if len(parts) > 1 else ""
+
+            if target not in self.all_agents:
+                self.notify(f"Unknown agent: {target}", severity="warning")
+                return
+            if not content:
+                self.notify(f"No message provided for @{target}", severity="warning")
+                return
+
+            await self.router.send("user", target, content)
+            return
+
+        # -- Plain text -> entry agent --------------------------------------
+        await self.router.send("user", self.entry_agent, line)
+
+    async def _handle_command(self, line: str) -> bool:
+        """Process a slash command. Returns True if the app should exit."""
+        cmd = line.split()[0].lower()
+
+        if cmd == "/done":
+            return True
+
+        if cmd == "/status":
+            if self.heartbeat is not None:
+                await self.heartbeat.fire()
+            else:
+                self.notify("Status: all agents idle", severity="information")
+            return False
+
+        if cmd == "/agents":
+            agent_list = []
+            for name, agent in self.all_agents.items():
+                # Import here to avoid circular dependency
+                from lattice.agent.cli_bridge import CLIBridge
+                from lattice.agent.script_bridge import ScriptBridge
+
+                if isinstance(agent, CLIBridge):
+                    agent_type = "cli"
+                elif isinstance(agent, ScriptBridge):
+                    agent_type = "script"
+                else:
+                    agent_type = "llm"
+                agent_list.append(f"  {name} ({agent_type})")
+
+            self.notify("\n".join(agent_list), severity="information", timeout=10)
+            return False
+
+        self.notify(f"Unknown command: {cmd}", severity="warning")
+        return False
 
 
 # ------------------------------------------------------------------ #
