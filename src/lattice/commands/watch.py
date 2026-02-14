@@ -20,6 +20,10 @@ from textual.widgets import Footer, Header, Input, Label, Static
 from lattice.session.models import (
     AgentDoneEvent,
     AgentStartEvent,
+    CLIProgressEvent,
+    CLITextChunkEvent,
+    CLIThinkingEvent,
+    CLIToolCallEvent,
     ErrorEvent,
     LLMCallEndEvent,
     LoopBoundaryEvent,
@@ -485,6 +489,56 @@ class WatchApp(App[None]):
             retry_str = " (retrying)" if retrying else ""
             self._add_event_line(
                 f"[red]Error[/red]: {agent_name}: {error}{retry_str}"
+            )
+
+        elif event_type == "cli_text_chunk":
+            agent_name = event_dict["agent"]
+            text = event_dict["text"]
+            if agent_name in self.agents:
+                self.agents[agent_name].current_activity = "responding"
+
+            # Truncate long text chunks for display
+            display_text = text[:120].replace("\n", " ")
+            if len(text) > 120:
+                display_text += "..."
+
+            self._add_event_line(
+                f"[green]CLI output[/green]: {agent_name}: {display_text}"
+            )
+
+        elif event_type == "cli_tool_call":
+            agent_name = event_dict["agent"]
+            tool_name = event_dict["tool"]
+            args = event_dict.get("args", {})
+
+            if agent_name in self.agents:
+                self.agents[agent_name].current_activity = f"calling {tool_name}"
+
+            # Format args briefly
+            args_str = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:2])
+            if len(args) > 2:
+                args_str += ", ..."
+
+            self._add_event_line(
+                f"[cyan]CLI tool[/cyan]: {agent_name}.{tool_name}({args_str})"
+            )
+
+        elif event_type == "cli_thinking":
+            agent_name = event_dict["agent"]
+            if agent_name in self.agents:
+                self.agents[agent_name].current_activity = "thinking"
+
+            self._add_event_line(f"[dim]CLI thinking[/dim]: {agent_name}")
+
+        elif event_type == "cli_progress":
+            agent_name = event_dict["agent"]
+            status = event_dict["status"]
+
+            if agent_name in self.agents:
+                self.agents[agent_name].current_activity = status
+
+            self._add_event_line(
+                f"[yellow]CLI progress[/yellow]: {agent_name}: {status}"
             )
 
         elif event_type == "loop_boundary":

@@ -243,7 +243,7 @@ class CLIBridge:
             prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
 
         try:
-            cmd_args = ["claude", "-p", prompt, "--output-format", "stream-json"]
+            cmd_args = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
 
             # Use --continue flag for follow-up messages to preserve context.
             if is_followup and self._claude_conversation_id is not None:
@@ -374,23 +374,64 @@ class CLIBridge:
     async def _dispatch_claude_event(self, event: dict[str, object], current_result: str) -> str:
         """Process a single streaming event from Claude CLI.
 
+        Claude CLI ``--output-format stream-json --verbose`` emits these
+        top-level event types:
+
+        * ``system``   — init event with session_id, tools, etc.
+        * ``assistant`` — wraps an API message; content blocks are nested
+          inside ``message.content[]`` as ``text``, ``tool_use``, or
+          ``thinking`` blocks.
+        * ``user``     — tool results fed back to the model.
+        * ``result``   — final aggregated result with ``result`` field.
+
         Returns updated result text.
         """
         event_type = event.get("type")
 
-        if event_type == "text":
-            # Text chunk from Claude's response.
-            text = str(event.get("text", ""))
-            if text:
+        if event_type == "system":
+            # Init event — extract session_id for --continue.
+            session_id = event.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                self._claude_conversation_id = session_id
+            self._recorder.record(
+                CLIProgressEvent(ts="", seq=0, agent=self.name, status="initialized")
+            )
+
+        elif event_type == "assistant":
+            # Assistant message — extract content blocks.
+            message = event.get("message")
+            if isinstance(message, dict):
+                content_blocks = message.get("content")
+                if isinstance(content_blocks, list):
+                    for block in content_blocks:
+                        if not isinstance(block, dict):
+                            continue
+                        current_result = self._dispatch_content_block(block, current_result)
+
+        elif event_type == "result":
+            # Final result — use the aggregated result text.
+            result = event.get("result")
+            if isinstance(result, str) and result:
+                current_result = result
+
+        # Ignore "user" (tool result echoes) and unknown types.
+        return current_result
+
+    def _dispatch_content_block(self, block: dict[str, object], current_result: str) -> str:
+        """Process a single content block from an assistant message."""
+        block_type = block.get("type")
+
+        if block_type == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text:
                 self._recorder.record(
                     CLITextChunkEvent(ts="", seq=0, agent=self.name, text=text)
                 )
                 current_result += text
 
-        elif event_type == "tool_use":
-            # Claude is calling a tool.
-            tool_name = str(event.get("name", ""))
-            tool_args = event.get("input", {})
+        elif block_type == "tool_use":
+            tool_name = str(block.get("name", ""))
+            tool_args = block.get("input", {})
             if not isinstance(tool_args, dict):
                 tool_args = {}
             self._recorder.record(
@@ -399,41 +440,13 @@ class CLIBridge:
                 )
             )
 
-        elif event_type == "thinking":
-            # Claude's internal reasoning.
-            content = str(event.get("content", ""))
-            if content:
+        elif block_type == "thinking":
+            content = block.get("thinking")
+            if isinstance(content, str) and content:
                 self._recorder.record(
                     CLIThinkingEvent(ts="", seq=0, agent=self.name, content=content)
                 )
 
-        elif event_type == "status":
-            # Progress update.
-            status = str(event.get("status", ""))
-            if status:
-                self._recorder.record(
-                    CLIProgressEvent(ts="", seq=0, agent=self.name, status=status)
-                )
-
-        elif event_type == "conversation_id":
-            # Store conversation ID for --continue.
-            conv_id = str(event.get("id", ""))
-            if conv_id and conv_id.replace("-", "").replace("_", "").isalnum():
-                self._claude_conversation_id = conv_id
-            else:
-                logger.warning(
-                    "%s: invalid conversation_id format '%s', ignoring",
-                    self.name,
-                    conv_id[:100],
-                )
-
-        elif event_type == "result":
-            # Final result — might be redundant with accumulated text.
-            result = str(event.get("content", ""))
-            if result:
-                current_result = result
-
-        # Ignore other event types.
         return current_result
 
     async def _process_message_queue(self) -> None:
