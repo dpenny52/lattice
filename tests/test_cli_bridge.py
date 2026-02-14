@@ -773,6 +773,344 @@ class TestEventRecording:
 
 
 # ------------------------------------------------------------------ #
+# Message queuing (Story 3.3)
+# ------------------------------------------------------------------ #
+
+
+class TestMessageQueuing:
+    """Verify message queuing and conversation continuity for Claude adapter."""
+
+    async def test_message_queued_when_busy(self, tmp_path: Path) -> None:
+        """Messages queue when Claude agent is busy."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        first_task_started = asyncio.Event()
+        first_task_complete = asyncio.Event()
+
+        # First message — blocks until we signal completion.
+        async def slow_communicate_1() -> tuple[bytes, bytes]:
+            first_task_started.set()
+            await first_task_complete.wait()
+            output = json.dumps({"result": "first response"})
+            return output.encode(), b""
+
+        mock_proc_1 = MagicMock()
+        mock_proc_1.returncode = 0
+        mock_proc_1.communicate = slow_communicate_1
+
+        # Second message — should queue and then process.
+        mock_proc_2 = MagicMock()
+        mock_proc_2.returncode = 0
+        output_2 = json.dumps({"result": "second response"})
+        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_proc_1
+            return mock_proc_2
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            # Start first message.
+            task_1 = asyncio.create_task(
+                bridge.handle_message("user", "first task")
+            )
+
+            # Wait for the first task to actually start processing.
+            await first_task_started.wait()
+
+            # Now send second message while first is still running.
+            task_2 = asyncio.create_task(
+                bridge.handle_message("user", "second task")
+            )
+            await asyncio.sleep(0.01)
+
+            # Second message should have queued immediately.
+            assert "[cli-agent is busy, message queued]" in captured
+
+            # Now let first task complete.
+            first_task_complete.set()
+
+            # Wait for both to complete.
+            await asyncio.wait_for(task_1, timeout=2.0)
+            await asyncio.wait_for(task_2, timeout=2.0)
+
+        assert "first response" in captured
+        assert "second response" in captured
+        recorder.close()
+
+    async def test_queued_messages_delivered_in_order(self, tmp_path: Path) -> None:
+        """Multiple queued messages are delivered in FIFO order."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        responses = [
+            json.dumps({"result": f"response {i}"}).encode()
+            for i in range(1, 5)
+        ]
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(responses[call_count - 1], b""))
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            # Send 4 messages rapidly.
+            tasks = [
+                asyncio.create_task(bridge.handle_message("user", f"task {i}"))
+                for i in range(1, 5)
+            ]
+
+            # Wait for all to complete.
+            await asyncio.gather(*tasks)
+
+        # Responses should appear in order.
+        response_texts = [c for c in captured if c.startswith("response")]
+        assert response_texts == ["response 1", "response 2", "response 3", "response 4"]
+        recorder.close()
+
+    async def test_continue_flag_used_for_followups(self, tmp_path: Path) -> None:
+        """Queued messages use --continue flag to preserve conversation context."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+
+        first_task_started = asyncio.Event()
+        first_task_complete = asyncio.Event()
+
+        # First response includes conversation_id.
+        async def slow_communicate_1() -> tuple[bytes, bytes]:
+            first_task_started.set()
+            await first_task_complete.wait()
+            output = json.dumps({
+                "result": "first",
+                "conversation_id": "conv-abc123",
+            })
+            return output.encode(), b""
+
+        mock_proc_1 = MagicMock()
+        mock_proc_1.returncode = 0
+        mock_proc_1.communicate = slow_communicate_1
+
+        # Second response (follow-up).
+        output_2 = json.dumps({"result": "second"})
+        mock_proc_2 = MagicMock()
+        mock_proc_2.returncode = 0
+        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+
+        call_count = 0
+        recorded_args: list[tuple[Any, ...]] = []
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            recorded_args.append(args)
+            if call_count == 1:
+                return mock_proc_1
+            return mock_proc_2
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            # First message.
+            task_1 = asyncio.create_task(bridge.handle_message("user", "first"))
+            await first_task_started.wait()
+
+            # Second message (queues).
+            task_2 = asyncio.create_task(bridge.handle_message("user", "second"))
+            await asyncio.sleep(0.01)
+
+            # Let first task complete.
+            first_task_complete.set()
+
+            await asyncio.gather(task_1, task_2)
+
+        # Verify first call doesn't use --continue.
+        first_call_args = recorded_args[0]
+        assert "--continue" not in first_call_args
+
+        # Verify second call uses --continue with conversation_id.
+        second_call_args = recorded_args[1]
+        assert "--continue" in second_call_args
+        continue_idx = second_call_args.index("--continue")
+        assert second_call_args[continue_idx + 1] == "conv-abc123"
+        recorder.close()
+
+    async def test_immediate_dispatch_when_idle(self, tmp_path: Path) -> None:
+        """Messages sent to idle Claude agent dispatch immediately (no queue)."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        output = json.dumps({"result": "immediate response"})
+        mock_proc.communicate = AsyncMock(return_value=(output.encode(), b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            await bridge.handle_message("user", "task")
+
+        # No queue message should appear.
+        assert "[cli-agent is busy, message queued]" not in captured
+        assert "immediate response" in captured
+        recorder.close()
+
+    async def test_queue_feedback_shows_agent_busy(self, tmp_path: Path) -> None:
+        """Console feedback shows when agent is busy and message is queued."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        first_task_started = asyncio.Event()
+        first_task_complete = asyncio.Event()
+
+        # First subprocess blocks.
+        async def slow_communicate_1() -> tuple[bytes, bytes]:
+            first_task_started.set()
+            await first_task_complete.wait()
+            output = json.dumps({"result": "r1"})
+            return output.encode(), b""
+
+        mock_proc_1 = MagicMock()
+        mock_proc_1.returncode = 0
+        mock_proc_1.communicate = slow_communicate_1
+
+        # Second subprocess responds immediately.
+        mock_proc_2 = MagicMock()
+        mock_proc_2.returncode = 0
+        output_2 = json.dumps({"result": "r2"})
+        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_proc_1
+            return mock_proc_2
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            task_1 = asyncio.create_task(bridge.handle_message("user", "t1"))
+            await first_task_started.wait()
+            task_2 = asyncio.create_task(bridge.handle_message("user", "t2"))
+            await asyncio.sleep(0.01)
+
+            # Verify busy feedback before first task completes.
+            assert "[cli-agent is busy, message queued]" in captured
+
+            first_task_complete.set()
+            await asyncio.gather(task_1, task_2)
+
+        recorder.close()
+
+    async def test_error_unblocks_queue(self, tmp_path: Path) -> None:
+        """If Claude task fails, the agent is unblocked and can process queue."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        # First task fails.
+        mock_proc_1 = MagicMock()
+        mock_proc_1.returncode = 1
+        mock_proc_1.communicate = AsyncMock(return_value=(b"", b"error"))
+
+        # Second task succeeds.
+        mock_proc_2 = MagicMock()
+        mock_proc_2.returncode = 0
+        output_2 = json.dumps({"result": "success"})
+        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_proc_1
+            return mock_proc_2
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            task_1 = asyncio.create_task(bridge.handle_message("user", "fail"))
+            await asyncio.sleep(0.01)
+            task_2 = asyncio.create_task(bridge.handle_message("user", "succeed"))
+            await asyncio.sleep(0.01)
+            await asyncio.gather(task_1, task_2)
+
+        # Second task should have processed despite first task failure.
+        assert "success" in captured
+        recorder.close()
+
+    async def test_queue_persists_across_multiple_tasks(self, tmp_path: Path) -> None:
+        """Queue can accumulate multiple messages and deliver all in order."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=lambda c: captured.append(c),
+        )
+
+        num_tasks = 10
+        procs = []
+        for i in range(num_tasks):
+            proc = MagicMock()
+            proc.returncode = 0
+            output = json.dumps({"result": f"task-{i+1}"})
+            proc.communicate = AsyncMock(return_value=(output.encode(), b""))
+            procs.append(proc)
+
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            proc = procs[call_count]
+            call_count += 1
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+            tasks = [
+                asyncio.create_task(bridge.handle_message("user", f"msg-{i+1}"))
+                for i in range(num_tasks)
+            ]
+            await asyncio.gather(*tasks)
+
+        # All tasks should have been processed in order.
+        task_responses = [c for c in captured if c.startswith("task-")]
+        assert len(task_responses) == num_tasks
+        for i in range(num_tasks):
+            assert task_responses[i] == f"task-{i+1}"
+        recorder.close()
+
+
+# ------------------------------------------------------------------ #
 # Integration with up.py
 # ------------------------------------------------------------------ #
 

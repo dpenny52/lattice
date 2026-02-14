@@ -74,6 +74,11 @@ class CLIBridge:
         self._task_counter = 0
         self._pending_tasks: dict[str, asyncio.Future[str]] = {}
 
+        # Claude adapter: message queue & conversation state.
+        self._message_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._claude_busy = False
+        self._claude_conversation_id: str | None = None
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -160,35 +165,70 @@ class CLIBridge:
         if not self._started:
             await self.start()
 
-        self._recorder.record(
-            AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
-        )
-
         if self._cli_type == "claude":
-            await self._handle_claude_task(from_agent, content)
-        else:
-            await self._handle_custom_task(from_agent, content)
+            # Check if Claude is currently busy.
+            if self._claude_busy:
+                # Queue the message and show feedback.
+                await self._message_queue.put((from_agent, content))
+                if self._on_response:
+                    self._on_response(f"[{self.name} is busy, message queued]")
+                logger.info(
+                    "%s: queued message from %s (queue size: %d)",
+                    self.name,
+                    from_agent,
+                    self._message_queue.qsize(),
+                )
+                return
 
-        self._recorder.record(
-            AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
-        )
+            # Not busy — process immediately and handle queue afterwards.
+            self._recorder.record(
+                AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
+            )
+            await self._handle_claude_task(from_agent, content)
+            self._recorder.record(
+                AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
+            )
+
+            # Process queued messages in order.
+            await self._process_message_queue()
+        else:
+            # Custom CLI — no queue needed.
+            self._recorder.record(
+                AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
+            )
+            await self._handle_custom_task(from_agent, content)
+            self._recorder.record(
+                AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
+            )
 
     # ------------------------------------------------------------------ #
     # Claude adapter
     # ------------------------------------------------------------------ #
 
-    async def _handle_claude_task(self, from_agent: str, content: str) -> None:
-        """Run a single Claude CLI invocation for this task."""
+    async def _handle_claude_task(
+        self, from_agent: str, content: str, *, is_followup: bool = False
+    ) -> None:
+        """Run a single Claude CLI invocation for this task.
+
+        Args:
+            from_agent: Name of the agent sending the message.
+            content: Message content.
+            is_followup: If True, use --continue to preserve conversation context.
+        """
+        self._claude_busy = True
         prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
 
         try:
+            cmd_args = ["claude", "-p", prompt, "--output-format", "json"]
+
+            # Use --continue flag for follow-up messages to preserve context.
+            if is_followup and self._claude_conversation_id is not None:
+                cmd_args.extend(["--continue", self._claude_conversation_id])
+
+            cmd_args.append("--dangerously-skip-permissions")
+
             proc = await asyncio.create_subprocess_exec(
-                "claude",
-                "-p",
-                prompt,
-                "--output-format",
-                "json",
-                "--dangerously-skip-permissions",
+                *cmd_args,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -202,6 +242,7 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
                 )
             )
+            self._claude_busy = False
             return
         except OSError as exc:
             error_msg = f"Failed to spawn Claude CLI: {exc}"
@@ -211,6 +252,7 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
                 )
             )
+            self._claude_busy = False
             return
 
         if proc.returncode != 0:
@@ -222,11 +264,13 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
                 )
             )
+            self._claude_busy = False
             return
 
         # Parse the JSON output.
         stdout_text = stdout_bytes.decode(errors="replace").strip()
         if not stdout_text:
+            self._claude_busy = False
             return
 
         try:
@@ -234,6 +278,10 @@ class CLIBridge:
         except json.JSONDecodeError:
             # Treat raw text as the result.
             result = {"result": stdout_text}
+
+        # Store conversation ID for future --continue use.
+        if isinstance(result, dict) and "conversation_id" in result:
+            self._claude_conversation_id = str(result["conversation_id"])
 
         # Extract the response content.
         if isinstance(result, dict):
@@ -248,6 +296,29 @@ class CLIBridge:
             # Skip routing back to "user" — that's handled by on_response.
             if from_agent != "user":
                 await self._router.send(self.name, from_agent, result_text)
+
+        self._claude_busy = False
+
+    async def _process_message_queue(self) -> None:
+        """Process queued messages sequentially as follow-ups."""
+        while not self._message_queue.empty():
+            from_agent, content = await self._message_queue.get()
+
+            logger.info(
+                "%s: processing queued message from %s (queue size: %d)",
+                self.name,
+                from_agent,
+                self._message_queue.qsize(),
+            )
+
+            # Record start/done events for each queued task.
+            self._recorder.record(
+                AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
+            )
+            await self._handle_claude_task(from_agent, content, is_followup=True)
+            self._recorder.record(
+                AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
+            )
 
     # ------------------------------------------------------------------ #
     # Custom CLI (long-running JSONL process)
