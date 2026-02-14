@@ -18,10 +18,12 @@ def test_version() -> None:
     assert f"lattice, version {__version__}" in result.output
 
 
-def test_init_stub() -> None:
-    result = CliRunner().invoke(cli, ["init"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+def test_init_runs() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["init"])
+        assert result.exit_code == 0
+        assert "Created lattice.yaml" in result.output
 
 
 def test_up_stub() -> None:
