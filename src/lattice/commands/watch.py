@@ -559,7 +559,7 @@ class WatchApp(App[None]):
                 args_str += ", ..."
 
             self._add_event_line(
-                f"[cyan]CLI tool[/cyan]: {agent_name}.{tool_name}({args_str})"
+                f"[cyan]{agent_name}[/cyan]: {tool_name}({args_str})"
             )
 
         elif event_type == "cli_thinking":
