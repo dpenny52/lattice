@@ -12,6 +12,7 @@ import click
 
 from lattice.agent.cli_bridge import CLIBridge
 from lattice.agent.llm_agent import LLMAgent
+from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
 from lattice.router.router import Router
@@ -93,6 +94,7 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     agent_names = list(config.agents.keys())
     agents: dict[str, LLMAgent] = {}
     cli_bridges: dict[str, CLIBridge] = {}
+    script_bridges: dict[str, ScriptBridge] = {}
 
     for name, agent_config in config.agents.items():
         peer_names = [n for n in agent_names if n != name] + ["user"]
@@ -128,13 +130,27 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
             router.register(name, bridge)
             cli_bridges[name] = bridge
 
+        elif agent_config.type == "script":
+            script = ScriptBridge(
+                name=name,
+                role=agent_config.role or "",
+                command=agent_config.command or "",
+                router=router,
+                recorder=recorder,
+                on_response=_make_response_callback(name),
+            )
+            router.register(name, script)
+            script_bridges[name] = script
+
         else:
             click.echo(
                 f"Warning: Agent '{name}' has type '{agent_config.type}' "
                 "-- not yet supported. Skipping."
             )
 
-    all_agents: dict[str, LLMAgent | CLIBridge] = {**agents, **cli_bridges}
+    all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge] = {
+        **agents, **cli_bridges, **script_bridges,
+    }
 
     if not all_agents:
         click.echo("Error: No agents configured. Nothing to run.", err=True)
@@ -186,7 +202,7 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
 async def _repl_loop(
     router: Router,
     entry_agent: str,
-    agents: dict[str, LLMAgent | CLIBridge],
+    agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
     shutdown_event: asyncio.Event,
 ) -> None:
     """Read user input in a loop, dispatch to agents, handle commands."""
@@ -234,7 +250,9 @@ def _read_input() -> str:
     return input("> ")
 
 
-def _handle_command(line: str, agents: dict[str, LLMAgent | CLIBridge]) -> bool:
+def _handle_command(
+    line: str, agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+) -> bool:
     """Process a slash command. Returns ``True`` if the REPL should exit."""
     cmd = line.split()[0].lower()
 
@@ -247,7 +265,12 @@ def _handle_command(line: str, agents: dict[str, LLMAgent | CLIBridge]) -> bool:
 
     if cmd == "/agents":
         for name, agent in agents.items():
-            agent_type = "cli" if isinstance(agent, CLIBridge) else "llm"
+            if isinstance(agent, CLIBridge):
+                agent_type = "cli"
+            elif isinstance(agent, ScriptBridge):
+                agent_type = "script"
+            else:
+                agent_type = "llm"
             click.echo(f"  {name} ({agent_type})")
         return False
 

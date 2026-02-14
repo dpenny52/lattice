@@ -19,6 +19,7 @@ from lattice.agent.providers import (
     ToolCall,
     create_provider,
 )
+from lattice.agent.script_bridge import ScriptBridge
 from lattice.agent.tools import SEND_MESSAGE_TOOL, ToolRegistry
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "LLMProvider",
     "LLMResponse",
     "OpenAIProvider",
+    "ScriptBridge",
     "TokenUsage",
     "ToolCall",
     "ToolRegistry",

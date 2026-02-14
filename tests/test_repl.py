@@ -442,15 +442,15 @@ class TestRunSession:
         assert "abc123def456" in captured.out
 
     async def test_no_llm_agents_aborts(self, tmp_path: Path, capsys: Any) -> None:
-        """If no LLM agents can be created, session aborts with error."""
-        # Create config with only a non-LLM agent
+        """If no supported agents can be created, session aborts with error."""
+        # Create config with only an unsupported agent type
         config = LatticeConfig(
             version="0.1",
             team="test-team",
             agents={
                 "runner": AgentConfig(
-                    type="script",
-                    command="echo hello",
+                    type="remote",
+                    url="http://example.com",
                 ),
             },
         )
