@@ -305,7 +305,7 @@ class WatchApp(App[None]):
         self.update_scheduled = False
 
         # Shutdown flag
-        self._shutdown = False
+        self._stop_watching = False
 
     def compose(self) -> ComposeResult:
         """Compose the TUI layout."""
@@ -322,12 +322,12 @@ class WatchApp(App[None]):
 
     def on_unmount(self) -> None:
         """Handle app shutdown."""
-        self._shutdown = True
+        self._stop_watching = True
 
     @work(exclusive=True)
     async def watch_session_file(self) -> None:
         """Watch the session JSONL file and update state."""
-        while not self._shutdown:
+        while not self._stop_watching:
             try:
                 await self._read_new_events()
             except Exception as e:

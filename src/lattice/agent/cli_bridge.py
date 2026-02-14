@@ -282,6 +282,20 @@ class CLIBridge:
         # Stream stdout and parse events as they arrive.
         result_text = await self._stream_claude_output(proc)
 
+        # Drain any remaining stdout/stderr so the subprocess can exit.
+        # Without this, the process can deadlock if it's blocked writing
+        # to a full pipe buffer (e.g. after a buffer-overflow skip).
+        try:
+            if proc.stdout and not proc.stdout.at_eof():
+                await proc.stdout.read()
+        except Exception:
+            pass
+        try:
+            if proc.stderr:
+                await proc.stderr.read()
+        except Exception:
+            pass
+
         # Wait for process to complete.
         returncode = await proc.wait()
 
