@@ -9,20 +9,25 @@ import pytest
 from click.testing import CliRunner
 
 from lattice.commands.replay import (
+    ReplayApp,
     SessionData,
     SessionMetadata,
     _extract_metadata,
     _list_sessions,
+    _load_verbose_data,
     _parse_event,
     _parse_session_file,
     replay,
 )
 from lattice.session.models import (
     AgentStartEvent,
+    CLITextChunkEvent,
     LLMCallEndEvent,
+    LLMCallStartEvent,
     MessageEvent,
     SessionEndEvent,
     SessionStartEvent,
+    ToolCallEvent,
 )
 
 
@@ -488,18 +493,27 @@ class TestReplayCLI:
         assert result.exit_code == 0
         assert "No sessions found" in result.output
 
-    def test_load_specific_session(self, tmp_path: Path) -> None:
+    def test_load_specific_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Create a test session
         session_file = tmp_path / "2026-02-14_team_xyz789.jsonl"
         _write_session_file(session_file, _minimal_session("xyz789", "test-team"))
+
+        # Mock ReplayApp.run() to prevent TUI from launching
+        app_run_called = False
+
+        def mock_run(self):
+            nonlocal app_run_called
+            app_run_called = True
+
+        monkeypatch.setattr(ReplayApp, "run", mock_run)
 
         runner = CliRunner()
         result = runner.invoke(replay, ["xyz789", "--sessions-dir", str(tmp_path)])
 
         assert result.exit_code == 0
+        assert "Loading session from" in result.output
         assert "xyz789" in result.output
-        assert "test-team" in result.output
-        assert "Complete ✓" in result.output
+        assert app_run_called, "ReplayApp.run() should have been called"
 
     def test_session_not_found(self, tmp_path: Path) -> None:
         runner = CliRunner()
@@ -520,17 +534,23 @@ class TestReplayCLI:
         assert result.exit_code == 1
         assert "Ambiguous" in result.output
 
-    def test_verbose_mode(self, tmp_path: Path) -> None:
+    def test_verbose_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         session_file = tmp_path / "2026-02-14_team_test123.jsonl"
         _write_session_file(session_file, _minimal_session("test123", "test-team"))
+
+        # Mock ReplayApp.run() to prevent TUI from launching
+        def mock_run(self):
+            pass
+
+        monkeypatch.setattr(ReplayApp, "run", mock_run)
 
         runner = CliRunner()
         result = runner.invoke(replay, ["test123", "--sessions-dir", str(tmp_path), "-v"])
 
         assert result.exit_code == 0
-        assert "Events" in result.output
-        assert "session_start" in result.output
-        assert "session_end" in result.output
+        assert "Loading session from" in result.output
+        # No verbose sidecar file, so should see warning
+        assert "No verbose sidecar found" in result.output
 
 
 # ===================================================================

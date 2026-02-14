@@ -765,11 +765,11 @@ def _load_verbose_data(session_file: Path) -> dict[int, Any]:
     default="sessions",
     help="Directory containing session files (default: ./sessions)",
 )
-@click.option("-v", "--verbose", is_flag=True, help="Enable verbose output.")
+@click.option("-v", "--verbose", is_flag=True, help="Load full tool results from verbose sidecar.")
 def replay(session_id: str | None, sessions_dir: Path, verbose: bool) -> None:
     """Replay a recorded session.
 
-    If SESSION_ID is provided, load and display that specific session.
+    If SESSION_ID is provided, load and display that specific session interactively.
     If SESSION_ID is omitted, list all available sessions.
     """
     # List mode: show all sessions
@@ -801,13 +801,24 @@ def replay(session_id: str | None, sessions_dir: Path, verbose: bool) -> None:
     click.echo(f"Loading session from {session_file.name}...")
     data = _parse_session_file(session_file)
 
-    # Display session details
-    _format_session_detail(data)
-
+    # Load verbose data if requested
+    verbose_data: dict[int, Any] = {}
     if verbose:
-        click.echo(f"\n📄 Events ({len(data.events)} total):\n")
-        for event in data.events[:20]:  # Show first 20 events
-            click.echo(f"  [{event.seq:04d}] {event.ts} {event.type}")
-        if len(data.events) > 20:
-            click.echo(f"  ... and {len(data.events) - 20} more events")
+        verbose_data = _load_verbose_data(session_file)
+        if verbose_data:
+            click.echo(f"Loaded {len(verbose_data)} verbose entries")
+        else:
+            click.echo("⚠️  No verbose sidecar found or empty", err=True)
+
+    # Show parse warnings if any
+    if data.parse_warnings:
+        click.echo(f"\n⚠️  {len(data.parse_warnings)} parse warnings:")
+        for warning in data.parse_warnings[:5]:
+            click.echo(f"   {warning}")
+        if len(data.parse_warnings) > 5:
+            click.echo(f"   ... and {len(data.parse_warnings) - 5} more")
         click.echo()
+
+    # Launch interactive TUI
+    app = ReplayApp(session_data=data, verbose_data=verbose_data)
+    app.run()
