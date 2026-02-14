@@ -57,7 +57,10 @@ def test_watch_no_session() -> None:
         assert "No active session found" in result.output
 
 
-def test_replay_stub() -> None:
-    result = CliRunner().invoke(cli, ["replay", "test-session"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+def test_replay_nonexistent_session() -> None:
+    """lattice replay with a nonexistent session ID exits with error."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["replay", "test-session"])
+        assert result.exit_code == 1
+        assert "Session not found" in result.output
