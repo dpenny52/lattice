@@ -471,7 +471,7 @@ class TestRunSession:
                 await _run_session(config, verbose=False)
 
         captured = capsys.readouterr()
-        assert "No LLM agents configured" in captured.err
+        assert "No agents configured" in captured.err
         mock_recorder.end.assert_called_once_with("error")
 
 

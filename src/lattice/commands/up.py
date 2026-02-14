@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from lattice.agent.cli_bridge import CLIBridge
 from lattice.agent.llm_agent import LLMAgent
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
@@ -88,44 +89,66 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     user_agent = UserAgent()
     router.register("user", user_agent)
 
-    # 4. Create and register LLM agents
+    # 4. Create and register agents
     agent_names = list(config.agents.keys())
     agents: dict[str, LLMAgent] = {}
+    cli_bridges: dict[str, CLIBridge] = {}
 
     for name, agent_config in config.agents.items():
-        if agent_config.type != "llm":
-            click.echo(
-                f"Warning: Agent '{name}' has type '{agent_config.type}' "
-                "-- only 'llm' agents are supported in v0.1. Skipping."
-            )
-            continue
-
         peer_names = [n for n in agent_names if n != name] + ["user"]
 
-        agent = LLMAgent(
-            name=name,
-            model_string=agent_config.model or "",
-            role=agent_config.role or "",
-            router=router,
-            recorder=recorder,
-            team_name=config.team,
-            peer_names=peer_names,
-            credentials=config.credentials,
-            configured_tools=agent_config.tools,
-            on_response=_make_response_callback(name),
-        )
-        router.register(name, agent)
-        agents[name] = agent
+        if agent_config.type == "llm":
+            agent = LLMAgent(
+                name=name,
+                model_string=agent_config.model or "",
+                role=agent_config.role or "",
+                router=router,
+                recorder=recorder,
+                team_name=config.team,
+                peer_names=peer_names,
+                credentials=config.credentials,
+                configured_tools=agent_config.tools,
+                on_response=_make_response_callback(name),
+            )
+            router.register(name, agent)
+            agents[name] = agent
 
-    if not agents:
-        click.echo("Error: No LLM agents configured. Nothing to run.", err=True)
+        elif agent_config.type == "cli":
+            bridge = CLIBridge(
+                name=name,
+                role=agent_config.role or "",
+                router=router,
+                recorder=recorder,
+                team_name=config.team,
+                peer_names=peer_names,
+                cli_type=agent_config.cli,
+                command=agent_config.command,
+                on_response=_make_response_callback(name),
+            )
+            router.register(name, bridge)
+            cli_bridges[name] = bridge
+
+        else:
+            click.echo(
+                f"Warning: Agent '{name}' has type '{agent_config.type}' "
+                "-- not yet supported. Skipping."
+            )
+
+    all_agents: dict[str, LLMAgent | CLIBridge] = {**agents, **cli_bridges}
+
+    if not all_agents:
+        click.echo("Error: No agents configured. Nothing to run.", err=True)
         recorder.end("error")
         return
 
+    # Start CLI bridges.
+    for bridge in cli_bridges.values():
+        await bridge.start()
+
     # 5. Print startup banner
-    entry = config.entry or next(iter(agents))
+    entry = config.entry or next(iter(all_agents))
     click.echo(f"\n  Lattice -- {config.team}")
-    click.echo(f"  Agents: {len(agents)} | Session: {recorder.session_id}")
+    click.echo(f"  Agents: {len(all_agents)} | Session: {recorder.session_id}")
     click.echo(f"  Entry:  {entry} | Topology: {config.topology.type}")
     click.echo(f"  Log:    {recorder.session_file}")
     click.echo()
@@ -139,8 +162,12 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
         loop.add_signal_handler(sig, shutdown_event.set)
 
     try:
-        await _repl_loop(router, entry, agents, shutdown_event)
+        await _repl_loop(router, entry, all_agents, shutdown_event)
     finally:
+        # Shutdown CLI bridges.
+        for bridge in cli_bridges.values():
+            await bridge.shutdown()
+
         # Drain in-flight tasks before closing
         pending = list(router._pending_tasks)
         if pending:
@@ -159,7 +186,7 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
 async def _repl_loop(
     router: Router,
     entry_agent: str,
-    agents: dict[str, LLMAgent],
+    agents: dict[str, LLMAgent | CLIBridge],
     shutdown_event: asyncio.Event,
 ) -> None:
     """Read user input in a loop, dispatch to agents, handle commands."""
@@ -207,7 +234,7 @@ def _read_input() -> str:
     return input("> ")
 
 
-def _handle_command(line: str, agents: dict[str, LLMAgent]) -> bool:
+def _handle_command(line: str, agents: dict[str, LLMAgent | CLIBridge]) -> bool:
     """Process a slash command. Returns ``True`` if the REPL should exit."""
     cmd = line.split()[0].lower()
 
@@ -219,8 +246,9 @@ def _handle_command(line: str, agents: dict[str, LLMAgent]) -> bool:
         return False
 
     if cmd == "/agents":
-        for name in agents:
-            click.echo(f"  {name} (llm)")
+        for name, agent in agents.items():
+            agent_type = "cli" if isinstance(agent, CLIBridge) else "llm"
+            click.echo(f"  {name} ({agent_type})")
         return False
 
     click.echo(f"Unknown command: {cmd}")

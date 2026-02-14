@@ -7,6 +7,7 @@ from lattice.agent.builtin_tools import (
     FILE_WRITE_TOOL,
     WEB_SEARCH_TOOL,
 )
+from lattice.agent.cli_bridge import CLIBridge
 from lattice.agent.llm_agent import LLMAgent
 from lattice.agent.providers import (
     AnthropicProvider,
@@ -22,6 +23,7 @@ from lattice.agent.tools import SEND_MESSAGE_TOOL, ToolRegistry
 
 __all__ = [
     "BUILTIN_TOOL_SCHEMAS",
+    "CLIBridge",
     "CODE_EXEC_TOOL",
     "FILE_READ_TOOL",
     "FILE_WRITE_TOOL",
