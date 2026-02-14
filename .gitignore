@@ -33,6 +33,9 @@ htmlcov/
 # Lattice runtime
 sessions/
 
+# Scripts
+ralph.sh
+
 # OS
 .DS_Store
 Thumbs.db
