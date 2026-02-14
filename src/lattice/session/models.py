@@ -128,6 +128,39 @@ class LoopBoundaryEvent(_EventBase):
     iteration: int = Field(ge=1, description="Loop iteration number (1-indexed)")
 
 
+class CLITextChunkEvent(_EventBase):
+    """Emitted when a CLI agent outputs a text chunk (streaming)."""
+
+    type: Literal["cli_text_chunk"] = "cli_text_chunk"
+    agent: str = Field(description="CLI agent name")
+    text: str = Field(description="Text chunk content")
+
+
+class CLIToolCallEvent(_EventBase):
+    """Emitted when a CLI agent calls a tool (streaming)."""
+
+    type: Literal["cli_tool_call"] = "cli_tool_call"
+    agent: str = Field(description="CLI agent name")
+    tool: str = Field(description="Tool name")
+    args: dict[str, Any] = Field(description="Tool arguments")
+
+
+class CLIThinkingEvent(_EventBase):
+    """Emitted when a CLI agent shows internal thinking (streaming)."""
+
+    type: Literal["cli_thinking"] = "cli_thinking"
+    agent: str = Field(description="CLI agent name")
+    content: str = Field(description="Thinking content")
+
+
+class CLIProgressEvent(_EventBase):
+    """Emitted when a CLI agent reports progress (streaming)."""
+
+    type: Literal["cli_progress"] = "cli_progress"
+    agent: str = Field(description="CLI agent name")
+    status: str = Field(description="Progress status message")
+
+
 def _event_discriminator(v: Any) -> str:
     """Extract the discriminator value from raw data or a model instance."""
     if isinstance(v, dict):
@@ -147,7 +180,11 @@ SessionEvent = Annotated[
     | Annotated[ErrorEvent, Tag("error")]
     | Annotated[AgentStartEvent, Tag("agent_start")]
     | Annotated[AgentDoneEvent, Tag("agent_done")]
-    | Annotated[LoopBoundaryEvent, Tag("loop_boundary")],
+    | Annotated[LoopBoundaryEvent, Tag("loop_boundary")]
+    | Annotated[CLITextChunkEvent, Tag("cli_text_chunk")]
+    | Annotated[CLIToolCallEvent, Tag("cli_tool_call")]
+    | Annotated[CLIThinkingEvent, Tag("cli_thinking")]
+    | Annotated[CLIProgressEvent, Tag("cli_progress")],
     Discriminator(_event_discriminator),
 ]
 """Discriminated union of all session event types."""

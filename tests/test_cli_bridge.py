@@ -15,6 +15,10 @@ from lattice.router.router import Agent, Router
 from lattice.session.models import (
     AgentDoneEvent,
     AgentStartEvent,
+    CLIProgressEvent,
+    CLITextChunkEvent,
+    CLIThinkingEvent,
+    CLIToolCallEvent,
     ErrorEvent,
     StatusEvent,
 )
@@ -93,11 +97,36 @@ def _make_mock_process(
         stdout = MockAsyncStdout()
     proc.stdout = stdout
     proc.stderr = MagicMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
     proc.wait = AsyncMock(return_value=0)
     proc.terminate = MagicMock()
     proc.kill = MagicMock()
 
     return proc
+
+
+def _make_mock_claude_process(
+    text_response: str = "",
+    returncode: int = 0,
+) -> tuple[MagicMock, MockAsyncStdout]:
+    """Create a mock Claude CLI process that streams a text response.
+
+    Returns (proc, stdout) so caller can feed additional events if needed.
+    """
+    stdout = MockAsyncStdout()
+
+    proc = MagicMock()
+    proc.returncode = None
+    proc.stdout = stdout
+    proc.stderr = MagicMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock(return_value=returncode)
+
+    # Pre-feed the text response if provided.
+    if text_response:
+        stdout.feed(json.dumps({"type": "text", "text": text_response}).encode() + b"\n")
+
+    return proc, stdout
 
 
 def _capture_events(recorder: SessionRecorder) -> list[Any]:
@@ -250,16 +279,28 @@ class TestClaudeAdapter:
             on_response=lambda c: captured.append(c),
         )
 
+        # Mock streaming stdout.
+        stdout = MockAsyncStdout()
+
         mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        output = json.dumps({"result": "Analysis complete"})
-        mock_proc.communicate = AsyncMock(return_value=(output.encode(), b""))
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
 
         with patch(
             "asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ) as mock_exec:
-            await bridge.handle_message("user", "analyze this")
+            task = asyncio.create_task(bridge.handle_message("user", "analyze this"))
+            await asyncio.sleep(0.01)
+
+            # Feed streaming result.
+            stdout.feed(json.dumps({"type": "text", "text": "Analysis complete"}).encode() + b"\n")
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
 
         mock_exec.assert_called_once()
         call_args = mock_exec.call_args
@@ -267,7 +308,7 @@ class TestClaudeAdapter:
         assert args[0] == "claude"
         assert "-p" in args
         assert "--output-format" in args
-        assert "json" in args
+        assert "stream-json" in args
         assert "--dangerously-skip-permissions" in args
 
         # Verify prompt includes role and message.
@@ -301,12 +342,20 @@ class TestClaudeAdapter:
         bridge = _make_bridge(router, recorder, cli_type="claude")
         events = _capture_events(recorder)
 
+        stdout = MockAsyncStdout()
+
         mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"API error"))
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"API error")
+        mock_proc.wait = AsyncMock(return_value=1)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            await bridge.handle_message("user", "do thing")
+            task = asyncio.create_task(bridge.handle_message("user", "do thing"))
+            await asyncio.sleep(0.01)
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
 
         error_events = [e for e in events if isinstance(e, ErrorEvent)]
         assert any("exited with code 1" in e.error for e in error_events)
@@ -790,13 +839,21 @@ class TestEventRecording:
         bridge = _make_bridge(router, recorder, cli_type="claude")
         events = _capture_events(recorder)
 
+        stdout = MockAsyncStdout()
+
         mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        output = json.dumps({"result": "ok"})
-        mock_proc.communicate = AsyncMock(return_value=(output.encode(), b""))
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            await bridge.handle_message("user", "test")
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+            stdout.feed(json.dumps({"type": "text", "text": "ok"}).encode() + b"\n")
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
 
         event_types = [type(e) for e in events]
         assert AgentStartEvent in event_types
@@ -827,24 +884,18 @@ class TestMessageQueuing:
         )
 
         first_task_started = asyncio.Event()
-        first_task_complete = asyncio.Event()
 
-        # First message — blocks until we signal completion.
-        async def slow_communicate_1() -> tuple[bytes, bytes]:
-            first_task_started.set()
-            await first_task_complete.wait()
-            output = json.dumps({"result": "first response"})
-            return output.encode(), b""
-
+        # First subprocess blocks on stdout until we feed data and close it.
+        stdout_1 = MockAsyncStdout()
         mock_proc_1 = MagicMock()
-        mock_proc_1.returncode = 0
-        mock_proc_1.communicate = slow_communicate_1
+        mock_proc_1.returncode = None
+        mock_proc_1.stdout = stdout_1
+        mock_proc_1.stderr = MagicMock()
+        mock_proc_1.stderr.read = AsyncMock(return_value=b"")
+        mock_proc_1.wait = AsyncMock(return_value=0)
 
-        # Second message — should queue and then process.
-        mock_proc_2 = MagicMock()
-        mock_proc_2.returncode = 0
-        output_2 = json.dumps({"result": "second response"})
-        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+        # Second subprocess responds normally.
+        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="second response")
 
         call_count = 0
 
@@ -852,6 +903,7 @@ class TestMessageQueuing:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
+                first_task_started.set()
                 return mock_proc_1
             return mock_proc_2
 
@@ -863,8 +915,10 @@ class TestMessageQueuing:
 
             # Wait for the first task to actually start processing.
             await first_task_started.wait()
+            # Let the event loop run so handle_message enters the streaming loop.
+            await asyncio.sleep(0.01)
 
-            # Now send second message while first is still running.
+            # Now send second message while first is still running (blocked on stdout).
             task_2 = asyncio.create_task(
                 bridge.handle_message("user", "second task")
             )
@@ -873,10 +927,14 @@ class TestMessageQueuing:
             # Second message should have queued immediately.
             assert "[cli-agent is busy, message queued]" in captured
 
-            # Now let first task complete.
-            first_task_complete.set()
+            # Now let first task complete by feeding data and closing stdout.
+            # Also pre-close stdout_2 since _process_message_queue will
+            # process the queued message inline before task_1 returns.
+            stdout_1.feed(json.dumps({"type": "text", "text": "first response"}).encode() + b"\n")
+            stdout_1.close()
+            stdout_2.close()
 
-            # Wait for both to complete.
+            # task_1 processes the queue inline, so both tasks complete together.
             await asyncio.wait_for(task_1, timeout=2.0)
             await asyncio.wait_for(task_2, timeout=2.0)
 
@@ -894,18 +952,14 @@ class TestMessageQueuing:
             on_response=lambda c: captured.append(c),
         )
 
-        responses = [
-            json.dumps({"result": f"response {i}"}).encode()
-            for i in range(1, 5)
-        ]
         call_count = 0
 
         async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            proc = MagicMock()
-            proc.returncode = 0
-            proc.communicate = AsyncMock(return_value=(responses[call_count - 1], b""))
+            proc, stdout = _make_mock_claude_process(text_response=f"response {call_count}")
+            # Close stdout immediately so readline() hits EOF after the pre-fed line.
+            stdout.close()
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
@@ -916,7 +970,7 @@ class TestMessageQueuing:
             ]
 
             # Wait for all to complete.
-            await asyncio.gather(*tasks)
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
 
         # Responses should appear in order.
         response_texts = [c for c in captured if c.startswith("response")]
@@ -929,27 +983,18 @@ class TestMessageQueuing:
         bridge = _make_bridge(router, recorder, cli_type="claude")
 
         first_task_started = asyncio.Event()
-        first_task_complete = asyncio.Event()
 
-        # First response includes conversation_id.
-        async def slow_communicate_1() -> tuple[bytes, bytes]:
-            first_task_started.set()
-            await first_task_complete.wait()
-            output = json.dumps({
-                "result": "first",
-                "conversation_id": "conv-abc123",
-            })
-            return output.encode(), b""
-
+        # First subprocess with conversation_id — blocks on stdout read.
+        stdout_1 = MockAsyncStdout()
         mock_proc_1 = MagicMock()
-        mock_proc_1.returncode = 0
-        mock_proc_1.communicate = slow_communicate_1
+        mock_proc_1.returncode = None
+        mock_proc_1.stdout = stdout_1
+        mock_proc_1.stderr = MagicMock()
+        mock_proc_1.stderr.read = AsyncMock(return_value=b"")
+        mock_proc_1.wait = AsyncMock(return_value=0)
 
-        # Second response (follow-up).
-        output_2 = json.dumps({"result": "second"})
-        mock_proc_2 = MagicMock()
-        mock_proc_2.returncode = 0
-        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+        # Second subprocess (follow-up).
+        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="second")
 
         call_count = 0
         recorded_args: list[tuple[Any, ...]] = []
@@ -959,6 +1004,7 @@ class TestMessageQueuing:
             call_count += 1
             recorded_args.append(args)
             if call_count == 1:
+                first_task_started.set()
                 return mock_proc_1
             return mock_proc_2
 
@@ -966,15 +1012,21 @@ class TestMessageQueuing:
             # First message.
             task_1 = asyncio.create_task(bridge.handle_message("user", "first"))
             await first_task_started.wait()
+            await asyncio.sleep(0.01)
 
             # Second message (queues).
             task_2 = asyncio.create_task(bridge.handle_message("user", "second"))
             await asyncio.sleep(0.01)
 
-            # Let first task complete.
-            first_task_complete.set()
+            # Let first task complete with conversation_id.
+            # Pre-close stdout_2 since _process_message_queue runs inline.
+            stdout_1.feed(json.dumps({"type": "conversation_id", "id": "conv-abc123"}).encode() + b"\n")
+            stdout_1.feed(json.dumps({"type": "text", "text": "first"}).encode() + b"\n")
+            stdout_1.close()
+            stdout_2.close()
 
-            await asyncio.gather(task_1, task_2)
+            await asyncio.wait_for(task_1, timeout=2.0)
+            await asyncio.wait_for(task_2, timeout=2.0)
 
         # Verify first call doesn't use --continue.
         first_call_args = recorded_args[0]
@@ -997,13 +1049,13 @@ class TestMessageQueuing:
             on_response=lambda c: captured.append(c),
         )
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        output = json.dumps({"result": "immediate response"})
-        mock_proc.communicate = AsyncMock(return_value=(output.encode(), b""))
+        mock_proc, stdout = _make_mock_claude_process(text_response="immediate response")
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            await bridge.handle_message("user", "task")
+            task = asyncio.create_task(bridge.handle_message("user", "task"))
+            await asyncio.sleep(0.01)
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
 
         # No queue message should appear.
         assert "[cli-agent is busy, message queued]" not in captured
@@ -1021,24 +1073,18 @@ class TestMessageQueuing:
         )
 
         first_task_started = asyncio.Event()
-        first_task_complete = asyncio.Event()
 
-        # First subprocess blocks.
-        async def slow_communicate_1() -> tuple[bytes, bytes]:
-            first_task_started.set()
-            await first_task_complete.wait()
-            output = json.dumps({"result": "r1"})
-            return output.encode(), b""
-
+        # First subprocess blocks on stdout read.
+        stdout_1 = MockAsyncStdout()
         mock_proc_1 = MagicMock()
-        mock_proc_1.returncode = 0
-        mock_proc_1.communicate = slow_communicate_1
+        mock_proc_1.returncode = None
+        mock_proc_1.stdout = stdout_1
+        mock_proc_1.stderr = MagicMock()
+        mock_proc_1.stderr.read = AsyncMock(return_value=b"")
+        mock_proc_1.wait = AsyncMock(return_value=0)
 
         # Second subprocess responds immediately.
-        mock_proc_2 = MagicMock()
-        mock_proc_2.returncode = 0
-        output_2 = json.dumps({"result": "r2"})
-        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="r2")
 
         call_count = 0
 
@@ -1046,20 +1092,27 @@ class TestMessageQueuing:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
+                first_task_started.set()
                 return mock_proc_1
             return mock_proc_2
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
             task_1 = asyncio.create_task(bridge.handle_message("user", "t1"))
             await first_task_started.wait()
+            await asyncio.sleep(0.01)
             task_2 = asyncio.create_task(bridge.handle_message("user", "t2"))
             await asyncio.sleep(0.01)
 
             # Verify busy feedback before first task completes.
             assert "[cli-agent is busy, message queued]" in captured
 
-            first_task_complete.set()
-            await asyncio.gather(task_1, task_2)
+            # Pre-close stdout_2 since _process_message_queue runs inline.
+            stdout_1.feed(json.dumps({"type": "text", "text": "r1"}).encode() + b"\n")
+            stdout_1.close()
+            stdout_2.close()
+
+            await asyncio.wait_for(task_1, timeout=2.0)
+            await asyncio.wait_for(task_2, timeout=2.0)
 
         recorder.close()
 
@@ -1074,15 +1127,11 @@ class TestMessageQueuing:
         )
 
         # First task fails.
-        mock_proc_1 = MagicMock()
-        mock_proc_1.returncode = 1
-        mock_proc_1.communicate = AsyncMock(return_value=(b"", b"error"))
+        mock_proc_1, stdout_1 = _make_mock_claude_process(text_response="", returncode=1)
+        mock_proc_1.stderr.read = AsyncMock(return_value=b"error")
 
         # Second task succeeds.
-        mock_proc_2 = MagicMock()
-        mock_proc_2.returncode = 0
-        output_2 = json.dumps({"result": "success"})
-        mock_proc_2.communicate = AsyncMock(return_value=(output_2.encode(), b""))
+        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="success")
 
         call_count = 0
 
@@ -1096,8 +1145,12 @@ class TestMessageQueuing:
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
             task_1 = asyncio.create_task(bridge.handle_message("user", "fail"))
             await asyncio.sleep(0.01)
+            stdout_1.close()
+
             task_2 = asyncio.create_task(bridge.handle_message("user", "succeed"))
             await asyncio.sleep(0.01)
+            stdout_2.close()
+
             await asyncio.gather(task_1, task_2)
 
         # Second task should have processed despite first task failure.
@@ -1115,20 +1168,14 @@ class TestMessageQueuing:
         )
 
         num_tasks = 10
-        procs = []
-        for i in range(num_tasks):
-            proc = MagicMock()
-            proc.returncode = 0
-            output = json.dumps({"result": f"task-{i+1}"})
-            proc.communicate = AsyncMock(return_value=(output.encode(), b""))
-            procs.append(proc)
-
         call_count = 0
 
         async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
             nonlocal call_count
-            proc = procs[call_count]
             call_count += 1
+            proc, stdout = _make_mock_claude_process(text_response=f"task-{call_count}")
+            # Close immediately so readline() hits EOF after the pre-fed line.
+            stdout.close()
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
@@ -1136,7 +1183,8 @@ class TestMessageQueuing:
                 asyncio.create_task(bridge.handle_message("user", f"msg-{i+1}"))
                 for i in range(num_tasks)
             ]
-            await asyncio.gather(*tasks)
+
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
 
         # All tasks should have been processed in order.
         task_responses = [c for c in captured if c.startswith("task-")]
@@ -1272,6 +1320,274 @@ class TestIntegrationWithUp:
         captured = capsys.readouterr()
         assert "researcher (llm)" in captured.out
         assert "coder (cli)" in captured.out
+
+
+# ------------------------------------------------------------------ #
+# Claude streaming (Story 5.2)
+# ------------------------------------------------------------------ #
+
+
+class TestClaudeStreaming:
+    """Tests for streaming Claude CLI output."""
+
+    async def test_stream_text_chunks(self, tmp_path: Path) -> None:
+        """Text chunks from Claude are recorded as CLITextChunkEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        # Mock streaming stdout.
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+
+            # Feed streaming text events.
+            stdout.feed(json.dumps({"type": "text", "text": "Hello "}).encode() + b"\n")
+            stdout.feed(json.dumps({"type": "text", "text": "world!"}).encode() + b"\n")
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        text_events = [e for e in events if isinstance(e, CLITextChunkEvent)]
+        assert len(text_events) == 2
+        assert text_events[0].text == "Hello "
+        assert text_events[1].text == "world!"
+        recorder.close()
+
+    async def test_stream_tool_calls(self, tmp_path: Path) -> None:
+        """Tool use events from Claude are recorded as CLIToolCallEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "use a tool"))
+            await asyncio.sleep(0.01)
+
+            # Feed tool use event.
+            stdout.feed(
+                json.dumps({
+                    "type": "tool_use",
+                    "name": "file-read",
+                    "input": {"path": "/tmp/test.txt"},
+                }).encode() + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        tool_events = [e for e in events if isinstance(e, CLIToolCallEvent)]
+        assert len(tool_events) == 1
+        assert tool_events[0].tool == "file-read"
+        assert tool_events[0].args == {"path": "/tmp/test.txt"}
+        recorder.close()
+
+    async def test_stream_thinking(self, tmp_path: Path) -> None:
+        """Thinking events from Claude are recorded as CLIThinkingEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "think"))
+            await asyncio.sleep(0.01)
+
+            # Feed thinking event.
+            stdout.feed(
+                json.dumps({
+                    "type": "thinking",
+                    "content": "I need to analyze the problem first...",
+                }).encode() + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        thinking_events = [e for e in events if isinstance(e, CLIThinkingEvent)]
+        assert len(thinking_events) == 1
+        assert thinking_events[0].content == "I need to analyze the problem first..."
+        recorder.close()
+
+    async def test_stream_progress(self, tmp_path: Path) -> None:
+        """Status events from Claude are recorded as CLIProgressEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "work"))
+            await asyncio.sleep(0.01)
+
+            # Feed status event.
+            stdout.feed(
+                json.dumps({"type": "status", "status": "Reading files..."}).encode() + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        progress_events = [e for e in events if isinstance(e, CLIProgressEvent)]
+        assert len(progress_events) == 1
+        assert progress_events[0].status == "Reading files..."
+        recorder.close()
+
+    async def test_stream_malformed_json(self, tmp_path: Path) -> None:
+        """Malformed JSON in stream doesn't crash the agent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+
+            # Feed malformed JSON.
+            stdout.feed(b"not json at all\n")
+            # Then valid JSON.
+            stdout.feed(json.dumps({"type": "text", "text": "recovered"}).encode() + b"\n")
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        # Should have recovered and processed the valid event.
+        text_events = [e for e in events if isinstance(e, CLITextChunkEvent)]
+        assert len(text_events) == 1
+        assert text_events[0].text == "recovered"
+        recorder.close()
+
+    async def test_stream_conversation_id(self, tmp_path: Path) -> None:
+        """Conversation ID from stream is stored for --continue."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "first"))
+            await asyncio.sleep(0.01)
+
+            # Feed conversation_id event.
+            stdout.feed(
+                json.dumps({"type": "conversation_id", "id": "conv-xyz789"}).encode() + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        assert bridge._claude_conversation_id == "conv-xyz789"
+        recorder.close()
+
+    async def test_stream_events_bracketed_by_agent_start_done(self, tmp_path: Path) -> None:
+        """Streaming events are bracketed by AgentStartEvent and AgentDoneEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(json.dumps({"type": "text", "text": "test"}).encode() + b"\n")
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        # Find the bracketing events.
+        start_idx = next(i for i, e in enumerate(events) if isinstance(e, AgentStartEvent))
+        done_idx = next(i for i, e in enumerate(events) if isinstance(e, AgentDoneEvent))
+        text_idx = next(i for i, e in enumerate(events) if isinstance(e, CLITextChunkEvent))
+
+        # Text event should be between start and done.
+        assert start_idx < text_idx < done_idx
+        recorder.close()
+
+    async def test_stream_uses_stream_json_format(self, tmp_path: Path) -> None:
+        """Claude adapter uses --output-format stream-json."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        # Verify command includes --output-format stream-json.
+        call_args = mock_exec.call_args[0]
+        assert "--output-format" in call_args
+        format_idx = call_args.index("--output-format")
+        assert call_args[format_idx + 1] == "stream-json"
+        recorder.close()
 
     async def test_only_cli_agents_can_run(self, tmp_path: Path, capsys: Any) -> None:
         """A team with only CLI agents can still run."""

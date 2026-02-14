@@ -13,6 +13,10 @@ from lattice.router.router import Router
 from lattice.session.models import (
     AgentDoneEvent,
     AgentStartEvent,
+    CLIProgressEvent,
+    CLITextChunkEvent,
+    CLIThinkingEvent,
+    CLIToolCallEvent,
     ErrorEvent,
     StatusEvent,
 )
@@ -239,7 +243,7 @@ class CLIBridge:
             prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
 
         try:
-            cmd_args = ["claude", "-p", prompt, "--output-format", "json"]
+            cmd_args = ["claude", "-p", prompt, "--output-format", "stream-json"]
 
             # Use --continue flag for follow-up messages to preserve context.
             if is_followup and self._claude_conversation_id is not None:
@@ -253,7 +257,6 @@ class CLIBridge:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_bytes, stderr_bytes = await proc.communicate()
         except FileNotFoundError:
             error_msg = "Claude CLI not found -- is 'claude' installed and on PATH?"
             logger.error("%s: %s", self.name, error_msg)
@@ -275,10 +278,17 @@ class CLIBridge:
             self._claude_busy = False
             return
 
-        if proc.returncode != 0:
-            # Truncate bytes before decode to prevent excessive memory use with invalid UTF-8.
+        # Stream stdout and parse events as they arrive.
+        result_text = await self._stream_claude_output(proc)
+
+        # Wait for process to complete.
+        returncode = await proc.wait()
+
+        if returncode != 0:
+            # Read stderr for error details.
+            stderr_bytes = await proc.stderr.read() if proc.stderr else b""
             stderr_text = stderr_bytes[:2048].decode(errors="replace").strip()[:500]
-            error_msg = f"Claude CLI exited with code {proc.returncode}: {stderr_text}"
+            error_msg = f"Claude CLI exited with code {returncode}: {stderr_text}"
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
                 ErrorEvent(
@@ -287,37 +297,6 @@ class CLIBridge:
             )
             self._claude_busy = False
             return
-
-        # Parse the JSON output.
-        stdout_text = stdout_bytes.decode(errors="replace").strip()
-        if not stdout_text:
-            self._claude_busy = False
-            return
-
-        try:
-            result = json.loads(stdout_text)
-        except json.JSONDecodeError:
-            # Treat raw text as the result.
-            result = {"result": stdout_text}
-
-        # Store conversation ID for future --continue use.
-        if isinstance(result, dict) and "conversation_id" in result:
-            conv_id = str(result["conversation_id"])
-            # Validate: alphanumeric + hyphens only to prevent injection.
-            if conv_id and conv_id.replace("-", "").replace("_", "").isalnum():
-                self._claude_conversation_id = conv_id
-            else:
-                logger.warning(
-                    "%s: invalid conversation_id format '%s', ignoring",
-                    self.name,
-                    conv_id[:100],
-                )
-
-        # Extract the response content.
-        if isinstance(result, dict):
-            result_text = result.get("result", "")
-        else:
-            result_text = str(result)
 
         if result_text:
             if self._on_response:
@@ -328,6 +307,134 @@ class CLIBridge:
                 await self._router.send(self.name, from_agent, result_text)
 
         self._claude_busy = False
+
+    async def _stream_claude_output(self, proc: asyncio.subprocess.Process) -> str:
+        """Stream and parse JSON events from Claude CLI stdout.
+
+        Returns the final result text.
+        """
+        if proc.stdout is None:
+            return ""
+
+        result_text = ""
+        partial_line = ""
+
+        try:
+            while True:
+                # Read one line at a time.
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
+                    # EOF
+                    break
+
+                if len(line_bytes) > _MAX_LINE_BYTES:
+                    logger.warning(
+                        "%s: stdout line exceeds %d bytes, skipping",
+                        self.name,
+                        _MAX_LINE_BYTES,
+                    )
+                    continue
+
+                decoded = line_bytes.decode(errors="replace")
+                line_str = (partial_line + decoded).strip()
+                partial_line = ""
+
+                if not line_str:
+                    continue
+
+                # Try to parse as JSON.
+                try:
+                    event = json.loads(line_str)
+                except json.JSONDecodeError as exc:
+                    # Check if this looks like incomplete JSON (doesn't end with newline from original).
+                    # If the original line ended with \n, it's complete but malformed.
+                    if decoded.endswith("\n"):
+                        # Complete line but invalid JSON — log and skip.
+                        logger.warning(
+                            "%s: malformed JSON from Claude stdout: %s",
+                            self.name,
+                            line_str[:200],
+                        )
+                        continue
+                    else:
+                        # No newline yet — might be incomplete, save for next iteration.
+                        partial_line = line_str
+                        continue
+
+                # Dispatch the parsed event.
+                result_text = await self._dispatch_claude_event(event, result_text)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("%s: error reading Claude stdout: %s", self.name, exc)
+
+        return result_text
+
+    async def _dispatch_claude_event(self, event: dict[str, object], current_result: str) -> str:
+        """Process a single streaming event from Claude CLI.
+
+        Returns updated result text.
+        """
+        event_type = event.get("type")
+
+        if event_type == "text":
+            # Text chunk from Claude's response.
+            text = str(event.get("text", ""))
+            if text:
+                self._recorder.record(
+                    CLITextChunkEvent(ts="", seq=0, agent=self.name, text=text)
+                )
+                current_result += text
+
+        elif event_type == "tool_use":
+            # Claude is calling a tool.
+            tool_name = str(event.get("name", ""))
+            tool_args = event.get("input", {})
+            if not isinstance(tool_args, dict):
+                tool_args = {}
+            self._recorder.record(
+                CLIToolCallEvent(
+                    ts="", seq=0, agent=self.name, tool=tool_name, args=tool_args
+                )
+            )
+
+        elif event_type == "thinking":
+            # Claude's internal reasoning.
+            content = str(event.get("content", ""))
+            if content:
+                self._recorder.record(
+                    CLIThinkingEvent(ts="", seq=0, agent=self.name, content=content)
+                )
+
+        elif event_type == "status":
+            # Progress update.
+            status = str(event.get("status", ""))
+            if status:
+                self._recorder.record(
+                    CLIProgressEvent(ts="", seq=0, agent=self.name, status=status)
+                )
+
+        elif event_type == "conversation_id":
+            # Store conversation ID for --continue.
+            conv_id = str(event.get("id", ""))
+            if conv_id and conv_id.replace("-", "").replace("_", "").isalnum():
+                self._claude_conversation_id = conv_id
+            else:
+                logger.warning(
+                    "%s: invalid conversation_id format '%s', ignoring",
+                    self.name,
+                    conv_id[:100],
+                )
+
+        elif event_type == "result":
+            # Final result — might be redundant with accumulated text.
+            result = str(event.get("content", ""))
+            if result:
+                current_result = result
+
+        # Ignore other event types.
+        return current_result
 
     async def _process_message_queue(self) -> None:
         """Process queued messages sequentially as follow-ups."""

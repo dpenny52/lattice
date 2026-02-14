@@ -187,22 +187,24 @@ class WatchApp(App[None]):
     CSS = """
     Screen {
         layout: grid;
-        grid-size: 2 3;
-        grid-rows: 1fr 2fr 1fr;
+        grid-size: 2 2;
+        grid-rows: auto 1fr;
     }
 
     #agents-panel {
         column-span: 1;
-        row-span: 2;
+        row-span: 1;
         border: solid $primary;
         padding: 1;
+        max-height: 12;
     }
 
     #message-flow-panel {
         column-span: 1;
-        row-span: 2;
+        row-span: 1;
         border: solid $primary;
         padding: 1;
+        max-height: 12;
     }
 
     #latest-panel {
