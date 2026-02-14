@@ -322,8 +322,17 @@ class CLIBridge:
 
         try:
             while True:
-                # Read one line at a time.
-                line_bytes = await proc.stdout.readline()
+                try:
+                    line_bytes = await proc.stdout.readline()
+                except ValueError:
+                    # Line exceeded StreamReader buffer limit — skip and keep reading.
+                    logger.warning(
+                        "%s: stdout line exceeded buffer limit, skipping",
+                        self.name,
+                    )
+                    partial_line = ""
+                    continue
+
                 if not line_bytes:
                     # EOF
                     break
@@ -346,7 +355,7 @@ class CLIBridge:
                 # Try to parse as JSON.
                 try:
                     event = json.loads(line_str)
-                except json.JSONDecodeError as exc:
+                except json.JSONDecodeError:
                     # Check if this looks like incomplete JSON (doesn't end with newline from original).
                     # If the original line ended with \n, it's complete but malformed.
                     if decoded.endswith("\n"):

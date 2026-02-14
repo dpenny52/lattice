@@ -138,6 +138,10 @@ class LatestPanel(VerticalScroll):
             for event_line in self.events:
                 yield Label(event_line, classes="event-line", markup=True)
 
+    def watch_events(self) -> None:
+        """Auto-scroll to bottom when events change."""
+        self.call_after_refresh(self.scroll_end, animate=False)
+
     def add_event(self, event_str: str) -> None:
         """Add an event to the tail, maintaining max size."""
         events_copy = deque(self.events)

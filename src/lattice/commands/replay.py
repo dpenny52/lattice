@@ -204,7 +204,7 @@ def _list_sessions(sessions_dir: Path) -> list[SessionMetadata]:
 def _format_session_list(sessions: list[SessionMetadata]) -> None:
     """Pretty-print a list of sessions."""
     if not sessions:
-        click.echo("No sessions found in ./sessions/")
+        click.echo("No sessions found. Run `lattice up` to create one.")
         return
 
     click.echo(f"\n📊 Found {len(sessions)} session(s):\n")
