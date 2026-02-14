@@ -36,6 +36,7 @@ sessions/
 
 # Scripts
 ralph.sh
+.ralph-loop.log
 
 # OS
 .DS_Store

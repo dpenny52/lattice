@@ -256,6 +256,7 @@ class CLIBridge:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=_MAX_LINE_BYTES,
             )
         except FileNotFoundError:
             error_msg = "Claude CLI not found -- is 'claude' installed and on PATH?"
