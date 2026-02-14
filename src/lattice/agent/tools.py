@@ -66,11 +66,13 @@ class ToolRegistry:
         recorder: SessionRecorder,
         configured_tools: list[str | dict[str, object]] | None = None,
         working_dir: Path | None = None,
+        allowed_paths: list[Path] | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._router = router
         self._recorder = recorder
         self._working_dir = working_dir or Path.cwd()
+        self._allowed_paths = allowed_paths or []
 
         # Always include send_message.
         self._tools: dict[str, dict[str, Any]] = {"send_message": SEND_MESSAGE_TOOL}
@@ -140,10 +142,10 @@ class ToolRegistry:
             return await handle_web_search(arguments)
 
         if name == "file-read":
-            return await handle_file_read(arguments, self._working_dir)
+            return await handle_file_read(arguments, self._working_dir, self._allowed_paths)
 
         if name == "file-write":
-            return await handle_file_write(arguments, self._working_dir)
+            return await handle_file_write(arguments, self._working_dir, self._allowed_paths)
 
         if name == "code-exec":
             return await handle_code_exec(arguments)

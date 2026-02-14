@@ -47,6 +47,7 @@ class ShutdownManager:
         cli_bridges: dict[str, CLIBridge],
         all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
         shutdown_event: asyncio.Event,
+        loop_count: int = 0,
     ) -> None:
         self._router = router
         self._recorder = recorder
@@ -55,6 +56,7 @@ class ShutdownManager:
         self._all_agents = all_agents
         self._shutdown_event = shutdown_event
         self._start_time = time.monotonic()
+        self._loop_count = loop_count
 
     async def execute(self, reason: str) -> None:
         """Run the full shutdown sequence."""
@@ -152,8 +154,14 @@ class ShutdownManager:
         msg_count = self._recorder.event_count
         agent_count = len(self._all_agents)
 
-        click.echo(
-            f"\nSession ended ({reason}) | {duration_str} "
-            f"| {msg_count} events | {agent_count} agent(s)"
-        )
+        summary_parts = [
+            f"\nSession ended ({reason})",
+            duration_str,
+            f"{msg_count} events",
+            f"{agent_count} agent(s)",
+        ]
+        if self._loop_count > 0:
+            summary_parts.append(f"{self._loop_count} loop(s)")
+
+        click.echo(" | ".join(summary_parts))
         click.echo(f"Log: {self._recorder.session_file}")

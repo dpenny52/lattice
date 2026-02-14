@@ -188,6 +188,7 @@ class CLIBridge:
                 prompt,
                 "--output-format",
                 "json",
+                "--dangerously-skip-permissions",
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -240,8 +241,13 @@ class CLIBridge:
         else:
             result_text = str(result)
 
-        if result_text and self._on_response:
-            self._on_response(result_text)
+        if result_text:
+            if self._on_response:
+                self._on_response(result_text)
+            # Route the result back to the sender so the conversation continues.
+            # Skip routing back to "user" — that's handled by on_response.
+            if from_agent != "user":
+                await self._router.send(self.name, from_agent, result_text)
 
     # ------------------------------------------------------------------ #
     # Custom CLI (long-running JSONL process)

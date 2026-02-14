@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from lattice.agent.providers import LLMProvider, LLMResponse, create_provider
@@ -30,7 +31,42 @@ _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 
 #: Maximum tool-call loop iterations before the agent bails out.
-_MAX_LOOP_ITERATIONS = 20
+_MAX_LOOP_ITERATIONS = 200
+
+#: Default pause duration (seconds) when a 429 rate limit is hit.
+_RATE_LIMIT_PAUSE = 60.0
+
+
+class RateLimitGate:
+    """Shared gate that pauses all LLM calls after any agent hits a 429.
+
+    Create one instance and pass it to every ``LLMAgent``.  When any agent
+    encounters a rate-limit error, it calls ``pause()`` which causes all
+    agents to wait before their next LLM call.
+    """
+
+    def __init__(self, pause_seconds: float = _RATE_LIMIT_PAUSE) -> None:
+        self._pause_seconds = pause_seconds
+        self._resume_at: float = 0.0
+
+    async def wait_if_paused(self) -> None:
+        """Block until the rate-limit cooldown expires (if active)."""
+        now = time.monotonic()
+        if now < self._resume_at:
+            delay = self._resume_at - now
+            logger.info("Rate limit gate: all LLM calls paused for %.1fs", delay)
+            await asyncio.sleep(delay)
+
+    def pause(self) -> None:
+        """Activate the gate — all agents will wait before their next call."""
+        self._resume_at = max(
+            self._resume_at, time.monotonic() + self._pause_seconds,
+        )
+        logger.warning(
+            "Rate limit hit — pausing all LLM calls for %.0fs",
+            self._pause_seconds,
+        )
+
 
 #: Pattern matching common API key formats to redact from error messages.
 _API_KEY_RE = re.compile(
@@ -65,7 +101,9 @@ class LLMAgent:
         provider: LLMProvider | None = None,
         model_override: str | None = None,
         configured_tools: list[str | dict[str, object]] | None = None,
+        allowed_paths: list[str] | None = None,
         on_response: Callable[[str], None] | None = None,
+        rate_gate: RateLimitGate | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -74,6 +112,7 @@ class LLMAgent:
         self._team_name = team_name
         self._peer_names = peer_names
         self._on_response = on_response
+        self._rate_gate = rate_gate
 
         # Per-peer conversation threads.
         self._threads: dict[str, list[dict[str, Any]]] = {}
@@ -86,8 +125,11 @@ class LLMAgent:
             self._provider, self._model = create_provider(model_string, credentials)
 
         # Tool registry.
+        resolved_paths = [Path(p).expanduser() for p in (allowed_paths or [])]
         self._tools = ToolRegistry(
-            name, router, recorder, configured_tools=configured_tools,
+            name, router, recorder,
+            configured_tools=configured_tools,
+            allowed_paths=resolved_paths or None,
         )
 
     # ------------------------------------------------------------------ #
@@ -117,6 +159,10 @@ class LLMAgent:
 
     async def shutdown(self) -> None:
         """No-op shutdown for protocol consistency."""
+
+    def reset_context(self) -> None:
+        """Clear all conversation threads for all peers."""
+        self._threads.clear()
 
     # ------------------------------------------------------------------ #
     # Internal loop
@@ -180,12 +226,22 @@ class LLMAgent:
                 )
             )
 
+    @staticmethod
+    def _is_rate_limit_error(exc: BaseException) -> bool:
+        """Return True if *exc* looks like a 429 rate-limit response."""
+        exc_str = str(exc).lower()
+        return "429" in exc_str or "rate_limit" in exc_str or "rate limit" in exc_str
+
     async def _call_llm(self, thread: list[dict[str, Any]]) -> LLMResponse | None:
         """Call the LLM with retries and exponential backoff."""
         messages = self._build_messages(thread)
         tools = self._tools.definitions
 
         for attempt in range(1, _MAX_RETRIES + 1):
+            # Wait if another agent triggered the rate-limit gate.
+            if self._rate_gate is not None:
+                await self._rate_gate.wait_if_paused()
+
             self._recorder.record(
                 LLMCallStartEvent(
                     ts="",
@@ -229,8 +285,12 @@ class LLMAgent:
                     )
                 )
                 if retrying:
-                    delay = _BASE_DELAY * (2 ** (attempt - 1))
-                    await asyncio.sleep(delay)
+                    if self._rate_gate is not None and self._is_rate_limit_error(exc):
+                        self._rate_gate.pause()
+                        await self._rate_gate.wait_if_paused()
+                    else:
+                        delay = _BASE_DELAY * (2 ** (attempt - 1))
+                        await asyncio.sleep(delay)
                     continue
                 return None
 

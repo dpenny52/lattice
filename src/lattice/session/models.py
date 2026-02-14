@@ -120,6 +120,14 @@ class AgentDoneEvent(_EventBase):
     reason: str = Field(description="Why the agent finished")
 
 
+class LoopBoundaryEvent(_EventBase):
+    """Emitted when a loop iteration starts or ends."""
+
+    type: Literal["loop_boundary"] = "loop_boundary"
+    boundary: Literal["start", "end"] = Field(description="Whether this is a loop start or end")
+    iteration: int = Field(ge=1, description="Loop iteration number (1-indexed)")
+
+
 def _event_discriminator(v: Any) -> str:
     """Extract the discriminator value from raw data or a model instance."""
     if isinstance(v, dict):
@@ -138,7 +146,8 @@ SessionEvent = Annotated[
     | Annotated[StatusEvent, Tag("status")]
     | Annotated[ErrorEvent, Tag("error")]
     | Annotated[AgentStartEvent, Tag("agent_start")]
-    | Annotated[AgentDoneEvent, Tag("agent_done")],
+    | Annotated[AgentDoneEvent, Tag("agent_done")]
+    | Annotated[LoopBoundaryEvent, Tag("loop_boundary")],
     Discriminator(_event_discriminator),
 ]
 """Discriminated union of all session event types."""

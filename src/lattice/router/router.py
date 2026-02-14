@@ -6,12 +6,17 @@ import asyncio
 import logging
 from typing import Protocol, runtime_checkable
 
+import click
+
 from lattice.config.models import TopologyConfig
 from lattice.router.topology import create_topology
 from lattice.session.models import MessageEvent
 from lattice.session.recorder import SessionRecorder
 
 logger = logging.getLogger(__name__)
+
+#: Max characters of message content to show in the console preview.
+_PREVIEW_LEN = 120
 
 
 class RouteNotAllowedError(Exception):
@@ -86,6 +91,17 @@ class Router:
             )
         )
 
+        # Print agent-to-agent messages to console (user messages are
+        # already shown by UserAgent / the REPL input line).
+        if from_agent != "user" and to_agent != "user":
+            preview = content.replace("\n", " ")
+            if len(preview) > _PREVIEW_LEN:
+                preview = preview[:_PREVIEW_LEN] + "…"
+            click.echo(
+                click.style(f"  {from_agent} → {to_agent}: ", fg="cyan")
+                + preview
+            )
+
         # Dispatch asynchronously — task is tracked to prevent GC
         agent = self._agents[to_agent]
         task = asyncio.create_task(agent.handle_message(from_agent, content))
@@ -132,6 +148,15 @@ class Router:
                         content=content,
                     )
                 )
+
+                if from_agent != "user" and target != "user":
+                    preview = content.replace("\n", " ")
+                    if len(preview) > _PREVIEW_LEN:
+                        preview = preview[:_PREVIEW_LEN] + "…"
+                    click.echo(
+                        click.style(f"  {from_agent} → {target}: ", fg="cyan")
+                        + preview
+                    )
 
                 agent = self._agents[target]
                 task = asyncio.create_task(

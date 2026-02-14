@@ -258,6 +258,7 @@ class TestClaudeAdapter:
         assert "-p" in args
         assert "--output-format" in args
         assert "json" in args
+        assert "--dangerously-skip-permissions" in args
 
         # Verify prompt includes role and message.
         prompt_idx = args.index("-p") + 1

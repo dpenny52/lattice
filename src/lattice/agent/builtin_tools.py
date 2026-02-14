@@ -109,18 +109,37 @@ _MAX_RESULTS_CAP = 20
 _MAX_READ_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-def _validate_path(path_str: str, working_dir: Path) -> Path:
+def _validate_path(
+    path_str: str,
+    working_dir: Path,
+    allowed_paths: list[Path] | None = None,
+) -> Path:
     """Resolve *path_str* against *working_dir* and reject path traversal.
 
-    Raises ``ValueError`` if the resolved path escapes the working directory.
+    Paths under *working_dir* or any entry in *allowed_paths* are permitted.
+    Raises ``ValueError`` if the resolved path escapes all allowed directories.
     """
-    resolved = (working_dir / path_str).resolve()
+    expanded = Path(path_str).expanduser()
+    if expanded.is_absolute():
+        resolved = expanded.resolve()
+    else:
+        resolved = (working_dir / expanded).resolve()
+
+    # Check working directory.
     working_resolved = working_dir.resolve()
     wd_prefix = str(working_resolved) + "/"
-    if resolved != working_resolved and not str(resolved).startswith(wd_prefix):
-        msg = f"Path '{path_str}' escapes the working directory"
-        raise ValueError(msg)
-    return resolved
+    if resolved == working_resolved or str(resolved).startswith(wd_prefix):
+        return resolved
+
+    # Check allowed paths.
+    for allowed in allowed_paths or []:
+        allowed_resolved = allowed.resolve()
+        ap_prefix = str(allowed_resolved) + "/"
+        if resolved == allowed_resolved or str(resolved).startswith(ap_prefix):
+            return resolved
+
+    msg = f"Path '{path_str}' escapes the working directory"
+    raise ValueError(msg)
 
 
 # ------------------------------------------------------------------ #
@@ -219,10 +238,11 @@ def _parse_ddg_html(html: str, max_results: int) -> list[dict[str, str]]:
 async def handle_file_read(
     arguments: dict[str, Any],
     working_dir: Path,
+    allowed_paths: list[Path] | None = None,
 ) -> str:
     """Read a local file and return its contents."""
     path_str = arguments.get("path", "")
-    resolved = _validate_path(path_str, working_dir)
+    resolved = _validate_path(path_str, working_dir, allowed_paths)
 
     if not resolved.exists():
         msg = f"File not found: {path_str}"
@@ -243,11 +263,12 @@ async def handle_file_read(
 async def handle_file_write(
     arguments: dict[str, Any],
     working_dir: Path,
+    allowed_paths: list[Path] | None = None,
 ) -> str:
     """Write content to a local file."""
     path_str = arguments.get("path", "")
     content = arguments.get("content", "")
-    resolved = _validate_path(path_str, working_dir)
+    resolved = _validate_path(path_str, working_dir, allowed_paths)
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(content, encoding="utf-8")

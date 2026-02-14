@@ -123,6 +123,258 @@ class TestAnthropicProvider:
         api_messages = call_kwargs.kwargs["messages"]
         assert all(m["role"] != "system" for m in api_messages)
 
+    async def test_translates_tool_calls(self, provider: AnthropicProvider) -> None:
+        """Assistant messages with tool_calls become Anthropic content blocks."""
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "done"
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 2
+
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+
+        provider._client.messages.create = AsyncMock(return_value=response)
+
+        await provider.chat(
+            messages=[
+                {"role": "user", "content": "do something"},
+                {
+                    "role": "assistant",
+                    "content": "I'll call the tool",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "arguments": {"city": "NYC"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "get_weather",
+                    "content": "72F and sunny",
+                },
+                {"role": "user", "content": "thanks"},
+            ],
+            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            model="claude-sonnet-4-5-20250929",
+        )
+
+        api_messages = provider._client.messages.create.call_args.kwargs["messages"]
+        # The assistant message should have content blocks.
+        assistant_msg = api_messages[1]
+        assert assistant_msg["role"] == "assistant"
+        assert isinstance(assistant_msg["content"], list)
+        assert assistant_msg["content"][0] == {"type": "text", "text": "I'll call the tool"}
+        assert assistant_msg["content"][1] == {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "get_weather",
+            "input": {"city": "NYC"},
+        }
+
+    async def test_translates_string_arguments(self, provider: AnthropicProvider) -> None:
+        """Tool call arguments as a JSON string are parsed to a dict."""
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "done"
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 2
+
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+
+        provider._client.messages.create = AsyncMock(return_value=response)
+
+        await provider.chat(
+            messages=[
+                {"role": "user", "content": "go"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_s",
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_s", "name": "get_weather", "content": "72F"},
+            ],
+            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            model="claude-sonnet-4-5-20250929",
+        )
+
+        api_messages = provider._client.messages.create.call_args.kwargs["messages"]
+        tool_use_block = api_messages[1]["content"][0]
+        assert tool_use_block["type"] == "tool_use"
+        assert tool_use_block["input"] == {"city": "NYC"}
+        assert isinstance(tool_use_block["input"], dict)
+
+    async def test_translates_tool_results(self, provider: AnthropicProvider) -> None:
+        """Tool result messages become user messages with tool_result blocks."""
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "done"
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 2
+
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+
+        provider._client.messages.create = AsyncMock(return_value=response)
+
+        await provider.chat(
+            messages=[
+                {"role": "user", "content": "check weather"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_x", "name": "get_weather", "arguments": {"city": "LA"}},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_x",
+                    "name": "get_weather",
+                    "content": "85F",
+                },
+            ],
+            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            model="claude-sonnet-4-5-20250929",
+        )
+
+        api_messages = provider._client.messages.create.call_args.kwargs["messages"]
+        tool_result_msg = api_messages[2]
+        assert tool_result_msg["role"] == "user"
+        assert isinstance(tool_result_msg["content"], list)
+        assert tool_result_msg["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "call_x",
+            "content": "85F",
+        }
+
+    async def test_groups_consecutive_tool_results(
+        self, provider: AnthropicProvider
+    ) -> None:
+        """Multiple consecutive tool results merge into one user message."""
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "done"
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 2
+
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+
+        provider._client.messages.create = AsyncMock(return_value=response)
+
+        await provider.chat(
+            messages=[
+                {"role": "user", "content": "check both"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "c1", "name": "get_weather", "arguments": {"city": "NYC"}},
+                        {"id": "c2", "name": "get_weather", "arguments": {"city": "LA"}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "name": "get_weather", "content": "72F"},
+                {"role": "tool", "tool_call_id": "c2", "name": "get_weather", "content": "85F"},
+            ],
+            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            model="claude-sonnet-4-5-20250929",
+        )
+
+        api_messages = provider._client.messages.create.call_args.kwargs["messages"]
+        # Should be: user, assistant, user (merged tool results) — 3 messages total.
+        assert len(api_messages) == 3
+        merged = api_messages[2]
+        assert merged["role"] == "user"
+        assert len(merged["content"]) == 2
+        assert merged["content"][0]["tool_use_id"] == "c1"
+        assert merged["content"][1]["tool_use_id"] == "c2"
+
+    async def test_full_tool_loop(self, provider: AnthropicProvider) -> None:
+        """End-to-end: user -> assistant+tool_use -> tool_results -> final text."""
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "The weather is nice"
+
+        usage = MagicMock()
+        usage.input_tokens = 30
+        usage.output_tokens = 10
+
+        response = MagicMock()
+        response.content = [text_block]
+        response.usage = usage
+
+        provider._client.messages.create = AsyncMock(return_value=response)
+
+        messages = [
+            {"role": "system", "content": "You are a weather bot"},
+            {"role": "user", "content": "weather in NYC and LA?"},
+            {
+                "role": "assistant",
+                "content": "Let me check both cities.",
+                "tool_calls": [
+                    {"id": "c1", "name": "get_weather", "arguments": {"city": "NYC"}},
+                    {"id": "c2", "name": "get_weather", "arguments": {"city": "LA"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "name": "get_weather", "content": "72F"},
+            {"role": "tool", "tool_call_id": "c2", "name": "get_weather", "content": "85F"},
+        ]
+
+        result = await provider.chat(
+            messages=messages,
+            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            model="claude-sonnet-4-5-20250929",
+        )
+
+        call_kwargs = provider._client.messages.create.call_args.kwargs
+        # System should be extracted.
+        assert call_kwargs["system"] == "You are a weather bot"
+
+        api_messages = call_kwargs["messages"]
+        # user, assistant (with tool_use blocks), user (merged tool_results) = 3 messages
+        assert len(api_messages) == 3
+        assert api_messages[0] == {"role": "user", "content": "weather in NYC and LA?"}
+
+        # Assistant has text + 2 tool_use blocks.
+        assert api_messages[1]["role"] == "assistant"
+        assert len(api_messages[1]["content"]) == 3
+        assert api_messages[1]["content"][0]["type"] == "text"
+        assert api_messages[1]["content"][1]["type"] == "tool_use"
+        assert api_messages[1]["content"][2]["type"] == "tool_use"
+
+        # Merged tool results.
+        assert api_messages[2]["role"] == "user"
+        assert len(api_messages[2]["content"]) == 2
+        assert api_messages[2]["content"][0]["type"] == "tool_result"
+        assert api_messages[2]["content"][1]["type"] == "tool_result"
+
+        # Response itself should be correct.
+        assert result.content == "The weather is nice"
+        assert result.usage.input_tokens == 30
+
 
 # ------------------------------------------------------------------ #
 # OpenAI provider

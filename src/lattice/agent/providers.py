@@ -59,22 +59,81 @@ class AnthropicProvider:
         key = api_key or environ.get("ANTHROPIC_API_KEY", "")
         self._client = AsyncAnthropic(api_key=key)
 
+    @staticmethod
+    def _translate_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Translate OpenAI-style messages to Anthropic content-block format.
+
+        Returns ``(system_text, api_messages)``.
+        """
+        system_text = ""
+        api_messages: list[dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role")
+
+            if role == "system":
+                system_text = str(msg.get("content", ""))
+
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Convert tool_calls list to Anthropic content blocks.
+                content_blocks: list[dict[str, Any]] = []
+                text = msg.get("content")
+                if text:
+                    content_blocks.append({"type": "text", "text": str(text)})
+                for tc in msg["tool_calls"]:
+                    arguments = tc.get("arguments", {})
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "input": arguments,
+                        }
+                    )
+                api_messages.append({"role": "assistant", "content": content_blocks})
+
+            elif role == "tool":
+                # Convert to user message with tool_result block.
+                # Group with previous user message if it already has tool_result blocks.
+                result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": msg["tool_call_id"],
+                    "content": str(msg.get("content", "")),
+                }
+                if (
+                    api_messages
+                    and api_messages[-1].get("role") == "user"
+                    and isinstance(api_messages[-1].get("content"), list)
+                    and api_messages[-1]["content"]
+                    and api_messages[-1]["content"][0].get("type") == "tool_result"
+                ):
+                    # Merge into the previous user message.
+                    api_messages[-1]["content"].append(result_block)
+                else:
+                    api_messages.append(
+                        {"role": "user", "content": [result_block]}
+                    )
+
+            else:
+                # Plain user or assistant messages pass through.
+                api_messages.append(msg)
+
+        return system_text, api_messages
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
     ) -> LLMResponse:
-        # Anthropic wants system as a separate kwarg, not in messages.
-        # TODO(story-2.4): translate tool_calls / tool-result messages into
-        #  Anthropic content-block format for multi-turn tool use.
-        system_text = ""
-        api_messages: list[dict[str, Any]] = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_text = str(msg.get("content", ""))
-            else:
-                api_messages.append(msg)
+        system_text, api_messages = self._translate_messages(messages)
 
         # Translate tool schemas to Anthropic format.
         anthropic_tools = [

@@ -49,10 +49,12 @@ def test_down_no_session() -> None:
     assert "No running session found" in result.output
 
 
-def test_watch_stub() -> None:
-    result = CliRunner().invoke(cli, ["watch"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+def test_watch_no_session() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["watch"])
+        assert result.exit_code == 1
+        assert "No active session found" in result.output
 
 
 def test_replay_stub() -> None:

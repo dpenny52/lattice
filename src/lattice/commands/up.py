@@ -11,13 +11,14 @@ from pathlib import Path
 import click
 
 from lattice.agent.cli_bridge import CLIBridge
-from lattice.agent.llm_agent import LLMAgent
+from lattice.agent.llm_agent import LLMAgent, RateLimitGate
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
 from lattice.heartbeat import Heartbeat
 from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router
+from lattice.session.models import LoopBoundaryEvent
 from lattice.session.recorder import SessionRecorder
 from lattice.shutdown import ShutdownManager
 
@@ -47,20 +48,31 @@ class UserAgent:
 @click.option(
     "-f", "--file", "config_file", type=click.Path(), help="Config file path."
 )
-@click.option("--watch", "enable_watch", is_flag=True, help="Re-run on file changes.")
-@click.option("--loop", is_flag=True, help="Keep running in a loop.")
+@click.option("--watch", "enable_watch", is_flag=True, help="Enable live TUI with input bar.")
+@click.option(
+    "--loop",
+    "loop_iterations",
+    type=int,
+    default=None,
+    is_flag=False,
+    flag_value=-1,
+    help="Re-run prompt in a loop. Optional: specify max iterations (omit for infinite).",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output.")
 def up(
     config_file: str | None,
     enable_watch: bool,
-    loop: bool,
+    loop_iterations: int | None,
     verbose: bool,
 ) -> None:
     """Start the agent team and enter the interactive REPL."""
     if enable_watch:
-        click.echo("Warning: --watch is not yet implemented.", err=True)
-    if loop:
-        click.echo("Warning: --loop is not yet implemented.", err=True)
+        click.echo(
+            "Error: Combined mode (--watch) is not yet implemented. "
+            "Use `lattice watch` in a separate terminal.",
+            err=True,
+        )
+        raise SystemExit(1)
 
     try:
         config = load_config(Path(config_file) if config_file else None)
@@ -68,7 +80,7 @@ def up(
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc
 
-    asyncio.run(_run_session(config, verbose))
+    asyncio.run(_run_session(config, verbose, loop_iterations))
 
 
 # ------------------------------------------------------------------ #
@@ -76,7 +88,9 @@ def up(
 # ------------------------------------------------------------------ #
 
 
-async def _run_session(config: LatticeConfig, verbose: bool) -> None:
+async def _run_session(
+    config: LatticeConfig, verbose: bool, loop_iterations: int | None = None
+) -> None:
     """Wire up all components and run the REPL until shutdown."""
     # 1. Create recorder
     config_hash = hashlib.sha256(
@@ -98,6 +112,7 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     agents: dict[str, LLMAgent] = {}
     cli_bridges: dict[str, CLIBridge] = {}
     script_bridges: dict[str, ScriptBridge] = {}
+    rate_gate = RateLimitGate()
 
     for name, agent_config in config.agents.items():
         peer_names = [n for n in agent_names if n != name] + ["user"]
@@ -113,7 +128,9 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
                 peer_names=peer_names,
                 credentials=config.credentials,
                 configured_tools=agent_config.tools,
+                allowed_paths=config.allowed_paths or None,
                 on_response=_make_response_callback(name),
+                rate_gate=rate_gate,
             )
             router.register(name, agent)
             agents[name] = agent
@@ -196,24 +213,38 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     if entry in agents:
         _install_heartbeat_hook(agents[entry], heartbeat)
 
-    # 8. Create shutdown manager
-    shutdown_mgr = ShutdownManager(
-        router=router,
-        recorder=recorder,
-        heartbeat=heartbeat,
-        cli_bridges=cli_bridges,
-        all_agents=all_agents,
-        shutdown_event=shutdown_event,
-    )
-
-    # Track why we're shutting down — updated by REPL exit path
+    # Track why we're shutting down and loop count
     shutdown_reason = "user_shutdown"
+    loop_count = 0
 
     try:
-        shutdown_reason = await _repl_loop(
-            router, entry, all_agents, shutdown_event, heartbeat,
-        )
+        # Determine if we're running in loop mode
+        if loop_iterations is not None:
+            shutdown_reason, loop_count = await _loop_mode(
+                router,
+                entry,
+                all_agents,
+                agents,
+                shutdown_event,
+                heartbeat,
+                recorder,
+                loop_iterations,
+            )
+        else:
+            shutdown_reason = await _repl_loop(
+                router, entry, all_agents, shutdown_event, heartbeat,
+            )
     finally:
+        # Create shutdown manager with loop count
+        shutdown_mgr = ShutdownManager(
+            router=router,
+            recorder=recorder,
+            heartbeat=heartbeat,
+            cli_bridges=cli_bridges,
+            all_agents=all_agents,
+            shutdown_event=shutdown_event,
+            loop_count=loop_count,
+        )
         await shutdown_mgr.execute(shutdown_reason)
         remove_pidfile()
 
@@ -367,3 +398,134 @@ def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
         heartbeat.check_response(content)
 
     agent._on_response = _hooked
+
+
+# ------------------------------------------------------------------ #
+# Loop mode
+# ------------------------------------------------------------------ #
+
+
+async def _loop_mode(
+    router: Router,
+    entry_agent: str,
+    all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+    agents: dict[str, LLMAgent],
+    shutdown_event: asyncio.Event,
+    heartbeat: Heartbeat | None,
+    recorder: SessionRecorder,
+    loop_iterations: int,
+) -> tuple[str, int]:
+    """Run the prompt in a loop with fresh context each iteration.
+
+    Args:
+        router: Message router
+        entry_agent: Name of the entry agent
+        all_agents: All agents (LLM + CLI + Script)
+        agents: LLM agents only (for context reset)
+        shutdown_event: Event to signal shutdown
+        heartbeat: Optional heartbeat monitor
+        recorder: Session recorder
+        loop_iterations: Max iterations (-1 for infinite loop)
+
+    Returns:
+        Tuple of (shutdown reason string, loop count)
+    """
+    # Get initial prompt from user
+    click.echo("Enter prompt for loop (this prompt will be re-run each iteration):")
+    try:
+        initial_prompt = await asyncio.get_event_loop().run_in_executor(
+            None, _read_input,
+        )
+    except EOFError:
+        return ("ctrl_c", 0)
+
+    initial_prompt = initial_prompt.strip()
+    if not initial_prompt:
+        click.echo("No prompt provided. Exiting loop mode.")
+        return ("user_shutdown", 0)
+
+    if heartbeat is not None:
+        await heartbeat.start()
+
+    reason = "complete"
+    iteration = 1
+
+    while not shutdown_event.is_set():
+        # Check max iterations
+        if loop_iterations > 0 and iteration > loop_iterations:
+            reason = "complete"
+            break
+
+        # Log loop boundary start
+        recorder.record(
+            LoopBoundaryEvent(
+                ts="", seq=0, boundary="start", iteration=iteration
+            )
+        )
+
+        # Print visual separator
+        click.echo(f"\n── Loop {iteration} ──\n")
+
+        # Reset context for all LLM agents
+        for agent in agents.values():
+            agent.reset_context()
+
+        # Send the initial prompt to the entry agent
+        await router.send("user", entry_agent, initial_prompt)
+
+        # Wait for the agent to complete this iteration
+        # Two exit conditions:
+        # 1. Heartbeat detects DONE marker -> exit entire loop
+        # 2. All router tasks complete -> continue to next iteration
+        while not shutdown_event.is_set():
+            # Give the agent time to start processing
+            await asyncio.sleep(0.05)
+
+            # Check if heartbeat detected "done" marker for entire loop
+            if heartbeat is not None and heartbeat.done_flag:
+                # Agent declared completion for the entire loop
+                reason = "complete"
+                # Wait for any remaining tasks to complete
+                if router.pending_tasks:
+                    await asyncio.gather(
+                        *list(router.pending_tasks), return_exceptions=True
+                    )
+                # Log loop boundary end
+                recorder.record(
+                    LoopBoundaryEvent(
+                        ts="", seq=0, boundary="end", iteration=iteration
+                    )
+                )
+                return (reason, iteration)
+
+            # Check if all tasks are done for this iteration
+            pending = list(router.pending_tasks)
+            if not pending:
+                # All tasks complete for this iteration
+                break
+
+            # Wait for tasks to complete, checking periodically
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=0.5,
+                )
+            except TimeoutError:
+                # Timeout just means we'll check again
+                pass
+
+        # Log loop boundary end
+        recorder.record(
+            LoopBoundaryEvent(
+                ts="", seq=0, boundary="end", iteration=iteration
+            )
+        )
+
+        # If we're shutting down externally (Ctrl+C), break
+        if shutdown_event.is_set():
+            reason = "ctrl_c"
+            break
+
+        iteration += 1
+
+    return (reason, iteration - 1)
