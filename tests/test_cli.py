@@ -43,10 +43,10 @@ def test_up_flags() -> None:
     assert "--verbose" in result.output
 
 
-def test_down_stub() -> None:
+def test_down_no_session() -> None:
     result = CliRunner().invoke(cli, ["down"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+    assert result.exit_code == 1
+    assert "No running session found" in result.output
 
 
 def test_watch_stub() -> None:

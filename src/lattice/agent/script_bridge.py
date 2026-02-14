@@ -112,6 +112,9 @@ class ScriptBridge:
         if self._on_response:
             self._on_response(stdout_text)
 
+    async def shutdown(self) -> None:
+        """No-op shutdown -- scripts are stateless."""
+
     def _record_error(self, error_msg: str) -> None:
         """Log and record an error event."""
         logger.error("%s: %s", self.name, error_msg)

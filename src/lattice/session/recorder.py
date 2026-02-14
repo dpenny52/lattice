@@ -95,6 +95,11 @@ class SessionRecorder:
         """Path to the primary JSONL file."""
         return self._session_file
 
+    @property
+    def event_count(self) -> int:
+        """Number of events recorded so far."""
+        return self._seq
+
     # ------------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------------

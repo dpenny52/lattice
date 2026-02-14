@@ -44,6 +44,11 @@ class Router:
         self._agents: dict[str, Agent] = {}
         self._pending_tasks: set[asyncio.Task[None]] = set()
 
+    @property
+    def pending_tasks(self) -> set[asyncio.Task[None]]:
+        """Currently in-flight dispatch tasks."""
+        return self._pending_tasks
+
     def register(self, name: str, agent: Agent) -> None:
         """Register an agent by name."""
         self._agents[name] = agent

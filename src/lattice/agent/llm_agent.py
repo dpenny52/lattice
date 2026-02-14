@@ -115,6 +115,9 @@ class LLMAgent:
             AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
         )
 
+    async def shutdown(self) -> None:
+        """No-op shutdown for protocol consistency."""
+
     # ------------------------------------------------------------------ #
     # Internal loop
     # ------------------------------------------------------------------ #

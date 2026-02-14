@@ -16,8 +16,10 @@ from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
 from lattice.heartbeat import Heartbeat
+from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router
 from lattice.session.recorder import SessionRecorder
+from lattice.shutdown import ShutdownManager
 
 # ------------------------------------------------------------------ #
 # UserAgent — pseudo-agent that prints messages to the terminal
@@ -170,6 +172,9 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     click.echo(f"  Log:    {recorder.session_file}")
     click.echo()
 
+    # Write pidfile for `lattice down` communication
+    write_pidfile(recorder.session_id, config.team)
+
     # 6. Enter REPL
     shutdown_event = asyncio.Event()
 
@@ -191,23 +196,26 @@ async def _run_session(config: LatticeConfig, verbose: bool) -> None:
     if entry in agents:
         _install_heartbeat_hook(agents[entry], heartbeat)
 
+    # 8. Create shutdown manager
+    shutdown_mgr = ShutdownManager(
+        router=router,
+        recorder=recorder,
+        heartbeat=heartbeat,
+        cli_bridges=cli_bridges,
+        all_agents=all_agents,
+        shutdown_event=shutdown_event,
+    )
+
+    # Track why we're shutting down — updated by REPL exit path
+    shutdown_reason = "user_shutdown"
+
     try:
-        await _repl_loop(router, entry, all_agents, shutdown_event, heartbeat)
+        shutdown_reason = await _repl_loop(
+            router, entry, all_agents, shutdown_event, heartbeat,
+        )
     finally:
-        await heartbeat.stop()
-
-        # Shutdown CLI bridges.
-        for bridge in cli_bridges.values():
-            await bridge.shutdown()
-
-        # Drain in-flight tasks before closing
-        pending = list(router._pending_tasks)
-        if pending:
-            click.echo("\nDraining in-flight tasks...")
-            await asyncio.gather(*pending, return_exceptions=True)
-
-        recorder.end("user_shutdown")
-        click.echo(f"\nSession ended. Log: {recorder.session_file}")
+        await shutdown_mgr.execute(shutdown_reason)
+        remove_pidfile()
 
 
 # ------------------------------------------------------------------ #
@@ -221,14 +229,20 @@ async def _repl_loop(
     agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
     shutdown_event: asyncio.Event,
     heartbeat: Heartbeat | None = None,
-) -> None:
-    """Read user input in a loop, dispatch to agents, handle commands."""
+) -> str:
+    """Read user input in a loop, dispatch to agents, handle commands.
+
+    Returns the shutdown reason string.
+    """
     if heartbeat is not None:
         await heartbeat.start()
+
+    reason = "user_shutdown"
 
     while not shutdown_event.is_set():
         # Check if heartbeat signalled completion
         if heartbeat is not None and heartbeat.done_flag:
+            reason = "complete"
             shutdown_event.set()
             break
 
@@ -275,6 +289,13 @@ async def _repl_loop(
 
         # -- Plain text -> entry agent --------------------------------------
         await router.send("user", entry_agent, line)
+
+    # If we got here because shutdown_event was set externally (Ctrl+C / SIGTERM)
+    # rather than via /done or heartbeat completion, mark as ctrl_c.
+    if shutdown_event.is_set() and reason == "user_shutdown":
+        reason = "ctrl_c"
+
+    return reason
 
 
 def _read_input() -> str:
@@ -334,7 +355,7 @@ def _make_response_callback(agent_name: str) -> Callable[[str], None]:
 
 
 def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
-    """Wrap the entry agent's ``on_response`` callback to intercept heartbeat responses."""
+    """Wrap the entry agent's ``on_response`` to check heartbeat markers."""
     if not hasattr(agent, "_on_response"):
         return
 
