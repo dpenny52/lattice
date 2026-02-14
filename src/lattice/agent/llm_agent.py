@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 from lattice.agent.providers import LLMProvider, LLMResponse, create_provider
@@ -64,6 +65,7 @@ class LLMAgent:
         provider: LLMProvider | None = None,
         model_override: str | None = None,
         configured_tools: list[str | dict[str, object]] | None = None,
+        on_response: Callable[[str], None] | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -71,6 +73,7 @@ class LLMAgent:
         self._recorder = recorder
         self._team_name = team_name
         self._peer_names = peer_names
+        self._on_response = on_response
 
         # Per-peer conversation threads.
         self._threads: dict[str, list[dict[str, Any]]] = {}
@@ -132,6 +135,8 @@ class LLMAgent:
                 # Plain text response -- agent is done for this turn.
                 if response.content:
                     thread.append({"role": "assistant", "content": response.content})
+                    if self._on_response is not None:
+                        self._on_response(response.content)
                 return
 
             # Build assistant message with tool calls for the thread.

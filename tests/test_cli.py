@@ -26,10 +26,13 @@ def test_init_runs() -> None:
         assert "Created lattice.yaml" in result.output
 
 
-def test_up_stub() -> None:
-    result = CliRunner().invoke(cli, ["up"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+def test_up_no_config_errors() -> None:
+    """lattice up without a lattice.yaml exits with error."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 1
+        assert "lattice.yaml" in result.output or "Error" in result.output
 
 
 def test_up_flags() -> None:
