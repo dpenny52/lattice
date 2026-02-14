@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from lattice.agent.builtin_tools import (
+    BUILTIN_TOOL_SCHEMAS,
+    handle_code_exec,
+    handle_file_read,
+    handle_file_write,
+    handle_web_search,
+)
 from lattice.session.models import ToolCallEvent, ToolResultEvent
 
 if TYPE_CHECKING:
     from lattice.router.router import Router
     from lattice.session.recorder import SessionRecorder
+
+logger = logging.getLogger(__name__)
 
 
 SEND_MESSAGE_TOOL: dict[str, Any] = {
@@ -33,11 +44,19 @@ SEND_MESSAGE_TOOL: dict[str, Any] = {
 }
 
 
+def _is_mcp_reference(tool: str | dict[str, object]) -> bool:
+    """Check if a tool entry is an MCP server reference."""
+    if isinstance(tool, dict):
+        return "mcp" in tool
+    return tool.startswith("mcp:")
+
+
 class ToolRegistry:
     """Holds tool definitions and executes tool calls.
 
     The ``send_message`` tool is always registered automatically. Additional
-    built-in tools (web-search, file-read, etc.) will be added in Story 2.4.
+    built-in tools are registered based on the agent's ``tools`` config list.
+    MCP references are recognised but deferred (logged and skipped).
     """
 
     def __init__(
@@ -45,15 +64,37 @@ class ToolRegistry:
         agent_name: str,
         router: Router,
         recorder: SessionRecorder,
+        configured_tools: list[str | dict[str, object]] | None = None,
+        working_dir: Path | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._router = router
         self._recorder = recorder
+        self._working_dir = working_dir or Path.cwd()
+
+        # Always include send_message.
+        self._tools: dict[str, dict[str, Any]] = {"send_message": SEND_MESSAGE_TOOL}
+
+        # Register configured built-in tools.
+        for tool in configured_tools or []:
+            if _is_mcp_reference(tool):
+                ref = tool if isinstance(tool, str) else tool.get("mcp", tool)
+                logger.warning(
+                    "MCP tool reference %r recognised but deferred (not yet supported)",
+                    ref,
+                )
+                continue
+
+            name = tool if isinstance(tool, str) else str(tool)
+            if name in BUILTIN_TOOL_SCHEMAS:
+                self._tools[name] = BUILTIN_TOOL_SCHEMAS[name]
+            else:
+                logger.warning("Unknown tool %r requested -- skipping", name)
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
         """Return all tool schemas for the LLM tool-use interface."""
-        return [SEND_MESSAGE_TOOL]
+        return list(self._tools.values())
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool by name and return the result as a string.
@@ -94,6 +135,18 @@ class ToolRegistry:
         """Route to the correct handler."""
         if name == "send_message":
             return await self._handle_send_message(arguments)
+
+        if name == "web-search":
+            return await handle_web_search(arguments)
+
+        if name == "file-read":
+            return await handle_file_read(arguments, self._working_dir)
+
+        if name == "file-write":
+            return await handle_file_write(arguments, self._working_dir)
+
+        if name == "code-exec":
+            return await handle_code_exec(arguments)
 
         msg = f"Unknown tool: {name}"
         raise ValueError(msg)

@@ -63,6 +63,7 @@ class LLMAgent:
         credentials: dict[str, str] | None = None,
         provider: LLMProvider | None = None,
         model_override: str | None = None,
+        configured_tools: list[str | dict[str, object]] | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -82,7 +83,9 @@ class LLMAgent:
             self._provider, self._model = create_provider(model_string, credentials)
 
         # Tool registry.
-        self._tools = ToolRegistry(name, router, recorder)
+        self._tools = ToolRegistry(
+            name, router, recorder, configured_tools=configured_tools,
+        )
 
     # ------------------------------------------------------------------ #
     # Agent protocol
