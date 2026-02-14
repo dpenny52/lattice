@@ -558,6 +558,58 @@ class TestReplayCLI:
 # ===================================================================
 
 
+# ===================================================================
+# Verbose data loading tests
+# ===================================================================
+
+
+class TestLoadVerboseData:
+    def test_load_verbose_data(self, tmp_path: Path) -> None:
+        """Test loading verbose sidecar file."""
+        session_file = tmp_path / "session.jsonl"
+        verbose_file = tmp_path / "session.verbose.jsonl"
+
+        # Write verbose entries
+        with verbose_file.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"seq": 1, "full_result": {"status": "ok", "data": "test"}}) + "\n")
+            fh.write(json.dumps({"seq": 3, "full_result": {"error": "failed"}}) + "\n")
+
+        data = _load_verbose_data(session_file)
+
+        assert len(data) == 2
+        assert data[1] == {"status": "ok", "data": "test"}
+        assert data[3] == {"error": "failed"}
+
+    def test_load_missing_verbose_file(self, tmp_path: Path) -> None:
+        """Test graceful handling when verbose file doesn't exist."""
+        session_file = tmp_path / "session.jsonl"
+        data = _load_verbose_data(session_file)
+        assert data == {}
+
+    def test_load_malformed_verbose_file(self, tmp_path: Path) -> None:
+        """Test graceful handling of malformed verbose entries."""
+        session_file = tmp_path / "session.jsonl"
+        verbose_file = tmp_path / "session.verbose.jsonl"
+
+        # Write some valid and some invalid entries
+        with verbose_file.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"seq": 1, "full_result": "good"}) + "\n")
+            fh.write("{ invalid json }\n")
+            fh.write(json.dumps({"seq": 2, "full_result": "also good"}) + "\n")
+
+        data = _load_verbose_data(session_file)
+
+        # Should load valid entries and skip invalid ones
+        assert len(data) == 2
+        assert data[1] == "good"
+        assert data[2] == "also good"
+
+
+# ===================================================================
+# Duration formatting tests
+# ===================================================================
+
+
 class TestDurationFormatting:
     def test_seconds(self, tmp_path: Path) -> None:
         meta = SessionMetadata(
