@@ -61,6 +61,25 @@ class SlowAgent:
         self.messages.append((from_agent, content))
 
 
+class RespondingAgent:
+    """Agent that replies via router.send() when it receives a message."""
+
+    def __init__(
+        self, router: Router, name: str, reply: str, delay: float = 0.0,
+    ) -> None:
+        self._router = router
+        self._name = name
+        self._reply = reply
+        self._delay = delay
+        self.messages: list[tuple[str, str]] = []
+
+    async def handle_message(self, from_agent: str, content: str) -> None:
+        self.messages.append((from_agent, content))
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        await self._router.send(self._name, from_agent, self._reply)
+
+
 def _make_recorder(tmp_path: Path) -> SessionRecorder:
     return SessionRecorder("test-team", "abc123", sessions_dir=tmp_path)
 
@@ -592,3 +611,182 @@ class TestEdgeCases:
     async def test_agent_protocol_check(self) -> None:
         """MockAgent should satisfy the Agent protocol."""
         assert isinstance(MockAgent(), Agent)
+
+
+# ===================================================================
+# Response channel tests
+# ===================================================================
+
+
+class TestResponseChannels:
+    async def test_expect_response_creates_channel(self, tmp_path: Path) -> None:
+        """expect_response should create a pending future."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        router.register("a", MockAgent())
+        router.register("b", MockAgent())
+
+        future = router.expect_response(from_agent="b", to_agent="a")
+        assert not future.done()
+        # Clean up
+        router.cancel_response(from_agent="b", to_agent="a")
+        rec.close()
+
+    async def test_send_resolves_response_channel(self, tmp_path: Path) -> None:
+        """Matching send() resolves future, skips handle_message."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        a = MockAgent()
+        b = MockAgent()
+        router.register("a", a)
+        router.register("b", b)
+
+        # Agent "a" is waiting for "b" to respond.
+        future = router.expect_response(from_agent="b", to_agent="a")
+
+        # "b" sends a reply to "a" — this should resolve the future.
+        await router.send("b", "a", "here's the reply")
+        await asyncio.sleep(0.05)
+
+        assert future.done()
+        assert future.result() == "here's the reply"
+        # handle_message should NOT have been called on "a".
+        assert len(a.messages) == 0
+        rec.close()
+
+    async def test_send_without_channel_dispatches_normally(
+        self, tmp_path: Path,
+    ) -> None:
+        """No channel = normal handle_message dispatch."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        a = MockAgent()
+        router.register("a", a)
+        router.register("b", MockAgent())
+
+        await router.send("b", "a", "normal message")
+        await asyncio.sleep(0.05)
+
+        assert a.messages == [("b", "normal message")]
+        rec.close()
+
+    async def test_duplicate_channel_raises(self, tmp_path: Path) -> None:
+        """Double expect_response for the same pair should raise RuntimeError."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        router.register("a", MockAgent())
+        router.register("b", MockAgent())
+
+        router.expect_response(from_agent="b", to_agent="a")
+        with pytest.raises(RuntimeError, match="Duplicate response channel"):
+            router.expect_response(from_agent="b", to_agent="a")
+        # Clean up
+        router.cancel_response(from_agent="b", to_agent="a")
+        rec.close()
+
+    async def test_cancel_response_cleans_up(self, tmp_path: Path) -> None:
+        """cancel_response should remove the channel and cancel the future."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        router.register("a", MockAgent())
+        router.register("b", MockAgent())
+
+        future = router.expect_response(from_agent="b", to_agent="a")
+        router.cancel_response(from_agent="b", to_agent="a")
+
+        assert future.cancelled()
+        # Should be able to register again after cancel.
+        future2 = router.expect_response(from_agent="b", to_agent="a")
+        assert not future2.done()
+        router.cancel_response(from_agent="b", to_agent="a")
+        rec.close()
+
+    async def test_cancel_all_responses(self, tmp_path: Path) -> None:
+        """cancel_all_responses should cancel all pending futures."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        router.register("a", MockAgent())
+        router.register("b", MockAgent())
+        router.register("c", MockAgent())
+
+        f1 = router.expect_response(from_agent="b", to_agent="a")
+        f2 = router.expect_response(from_agent="c", to_agent="a")
+
+        router.cancel_all_responses()
+
+        assert f1.cancelled()
+        assert f2.cancelled()
+        rec.close()
+
+    async def test_failed_task_resolves_waiting_channel(
+        self, tmp_path: Path,
+    ) -> None:
+        """Failed dispatch resolves waiting channels with error."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        bad = FailingAgent()
+        waiter = MockAgent()
+        router.register("bad", bad)
+        router.register("waiter", waiter)
+
+        # waiter is expecting a response from bad.
+        future = router.expect_response(from_agent="bad", to_agent="waiter")
+
+        # Send a message TO bad — bad will raise in handle_message.
+        await router.send("waiter", "bad", "do something")
+        # Wait for the task callback to fire.
+        await asyncio.sleep(0.1)
+
+        assert future.done()
+        result = future.result()
+        assert "Error" in result
+        assert "bad" in result
+        rec.close()
+
+    async def test_response_channel_message_still_recorded(
+        self, tmp_path: Path,
+    ) -> None:
+        """Intercepted messages are still recorded to JSONL."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        router.register("a", MockAgent())
+        router.register("b", MockAgent())
+
+        router.expect_response(from_agent="b", to_agent="a")
+        await router.send("b", "a", "intercepted reply")
+        await asyncio.sleep(0.05)
+
+        events = _read_events(rec)
+        message_events = [e for e in events if e["type"] == "message"]
+        assert len(message_events) == 1
+        assert message_events[0]["from"] == "b"
+        assert message_events[0]["to"] == "a"
+        assert message_events[0]["content"] == "intercepted reply"
+        rec.close()
+
+    async def test_responding_agent_round_trip(self, tmp_path: Path) -> None:
+        """End-to-end: expect_response + send + agent replies = future resolved."""
+        rec = _make_recorder(tmp_path)
+        router = Router(TopologyConfig(type="mesh"), rec)
+        lead = MockAgent()
+        router.register("lead", lead)
+
+        # dev will reply "done" when it receives a message.
+        dev = RespondingAgent(router, "dev", reply="done", delay=0.02)
+        router.register("dev", dev)
+
+        # lead expects a response from dev.
+        future = router.expect_response(from_agent="dev", to_agent="lead")
+
+        # lead sends a task to dev (this dispatches normally since there's
+        # no channel for (lead, dev)).
+        await router.send("lead", "dev", "implement feature X")
+
+        # Wait for dev to process and reply.
+        result = await asyncio.wait_for(future, timeout=1.0)
+
+        assert result == "done"
+        assert dev.messages == [("lead", "implement feature X")]
+        # lead's handle_message not called (channel intercepted).
+        assert len(lead.messages) == 0
+        rec.close()

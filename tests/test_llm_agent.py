@@ -206,7 +206,11 @@ class TestLLMAgentBasic:
                     ToolCall(
                         id="call_1",
                         name="send_message",
-                        arguments={"to": "agent-b", "content": "hey b!"},
+                        arguments={
+                            "to": "agent-b",
+                            "content": "hey b!",
+                            "wait_for_reply": False,
+                        },
                     )
                 ],
                 usage=TokenUsage(20, 10),
@@ -242,6 +246,7 @@ class TestLLMAgentBasic:
                         arguments={
                             "to": "agent-b",
                             "content": "msg1",
+                            "wait_for_reply": False,
                         },
                     )
                 ],
@@ -256,6 +261,7 @@ class TestLLMAgentBasic:
                         arguments={
                             "to": "agent-b",
                             "content": "msg2",
+                            "wait_for_reply": False,
                         },
                     )
                 ],
@@ -398,6 +404,7 @@ class TestEventRecording:
                             arguments={
                                 "to": "agent-b",
                                 "content": "hi",
+                                "wait_for_reply": False,
                             },
                         )
                     ],

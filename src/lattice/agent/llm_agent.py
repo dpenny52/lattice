@@ -329,7 +329,10 @@ class LLMAgent:
             parts.append(
                 f'\nYou are part of a team called "{self._team_name}".\n'
                 f"You can communicate with: {peer_list}\n"
-                "Use the send_message tool to talk to them."
+                "Use the send_message tool to talk to them.\n"
+                "By default, send_message waits for the target agent's reply "
+                "and returns it directly. Set wait_for_reply=false to send "
+                "without waiting."
             )
         return "\n".join(parts)
 
