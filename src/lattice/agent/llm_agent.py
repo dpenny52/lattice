@@ -231,6 +231,7 @@ class LLMAgent:
                     agent=self.name,
                     error=f"Max loop iterations ({_MAX_LOOP_ITERATIONS}) exceeded",
                     retrying=False,
+                    context="api_call",
                 )
             )
 
@@ -316,6 +317,7 @@ class LLMAgent:
                         agent=self.name,
                         error=safe_error,
                         retrying=retrying,
+                        context="api_call",
                     )
                 )
                 self._recorder.record(
@@ -374,8 +376,10 @@ class LLMAgent:
                 f'\nYou are part of a team called "{self._team_name}".\n'
                 f"You can communicate with: {peer_list}\n"
                 "Use the send_message tool to talk to them.\n"
-                "Messages from different agents arrive in the same conversation "
-                "prefixed with [from agent_name]."
+                "send_message is fire-and-forget — it dispatches your message "
+                "and returns immediately. Replies from other agents will arrive "
+                "later as new messages prefixed with [from agent_name]. "
+                "This is normal; do not consider yourself stuck while waiting."
             )
         return "\n".join(parts)
 

@@ -146,6 +146,6 @@ class ScriptBridge:
         logger.error("%s: %s", self.name, error_msg)
         self._recorder.record(
             ErrorEvent(
-                ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
             )
         )

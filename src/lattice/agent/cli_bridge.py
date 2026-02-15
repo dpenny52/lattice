@@ -180,7 +180,7 @@ class CLIBridge:
                         logger.error("%s: %s", self.name, error_msg)
                         self._recorder.record(
                             ErrorEvent(
-                                ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                                ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
                             )
                         )
                         if self._on_response:
@@ -269,7 +269,7 @@ class CLIBridge:
             logger.error("%s: Claude CLI not found", self.name)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error="Claude CLI not found", retrying=False,
+                    ts="", seq=0, agent=self.name, error="Claude CLI not found", retrying=False, context="subprocess",
                 )
             )
             self._claude_busy = False
@@ -281,7 +281,7 @@ class CLIBridge:
             logger.error("%s: failed to spawn Claude CLI: %s", self.name, exc)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=f"Failed to spawn Claude CLI: {exc}", retrying=False,
+                    ts="", seq=0, agent=self.name, error=f"Failed to spawn Claude CLI: {exc}", retrying=False, context="subprocess",
                 )
             )
             self._claude_busy = False
@@ -329,7 +329,7 @@ class CLIBridge:
             logger.error("%s: %s", self.name, full_error)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=full_error, retrying=False,
+                    ts="", seq=0, agent=self.name, error=full_error, retrying=False, context="subprocess",
                 )
             )
             self._claude_busy = False
@@ -532,7 +532,7 @@ class CLIBridge:
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
                 )
             )
             return
@@ -562,7 +562,7 @@ class CLIBridge:
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
                 )
             )
             self._pending_tasks.pop(task_id, None)
@@ -634,7 +634,7 @@ class CLIBridge:
             logger.error("%s: subprocess exited with code %d", self.name, returncode)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
                 )
             )
 

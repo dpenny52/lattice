@@ -99,9 +99,16 @@ class ErrorEvent(_EventBase):
     """An error encountered during the session."""
 
     type: Literal["error"] = "error"
-    agent: str = Field(description="Agent that hit the error")
+    agent: str | None = Field(
+        default=None,
+        description="Agent that hit the error (null for system-level errors)",
+    )
     error: str = Field(description="Error description")
     retrying: bool = Field(description="Whether the operation will be retried")
+    context: str | None = Field(
+        default=None,
+        description="Error context: api_call, config_validation, subprocess, etc.",
+    )
 
 
 class AgentStartEvent(_EventBase):

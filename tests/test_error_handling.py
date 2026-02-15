@@ -370,6 +370,7 @@ class TestErrorRecording:
         assert len(error_events) > 0
         assert error_events[0]["agent"] == "test_agent"
         assert "Test error" in error_events[0]["error"]
+        assert error_events[0]["context"] == "api_call"
 
     async def test_script_errors_recorded(self, tmp_path: Path) -> None:
         """Script errors should be recorded as ErrorEvent."""
@@ -405,3 +406,4 @@ class TestErrorRecording:
         error_events = [e for e in events if e.get("type") == "error"]
         assert len(error_events) > 0
         assert error_events[0]["agent"] == "failer"
+        assert error_events[0]["context"] == "subprocess"
