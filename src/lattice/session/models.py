@@ -93,7 +93,6 @@ class StatusEvent(_EventBase):
     type: Literal["status"] = "status"
     agent: str = Field(description="Agent reporting status")
     status: str = Field(description="Status message")
-    mood: str = Field(default="\U0001f634", description="Emoji representing agent mood")
 
 
 class ErrorEvent(_EventBase):
