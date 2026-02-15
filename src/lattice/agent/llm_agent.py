@@ -134,6 +134,9 @@ class LLMAgent:
         else:
             self._provider, self._model = create_provider(model_string, credentials)
 
+        # Agent lifecycle state — used by _compute_mood().
+        self._state: str = "idle"
+
         # Tool registry.
         resolved_paths = [Path(p).expanduser() for p in (allowed_paths or [])]
         self._tools = ToolRegistry(
@@ -154,6 +157,7 @@ class LLMAgent:
         2. Call the LLM.
         3. Process tool calls or return on plain text.
         """
+        self._state = "thinking"
         self._recorder.record(
             AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="llm")
         )
@@ -168,6 +172,9 @@ class LLMAgent:
         self._recorder.record(
             AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
         )
+        # Only go idle if _run_loop didn't already set error state.
+        if self._state != "error":
+            self._state = "idle"
 
     async def shutdown(self) -> None:
         """No-op shutdown for protocol consistency."""
@@ -175,6 +182,22 @@ class LLMAgent:
     def reset_context(self) -> None:
         """Clear the conversation thread."""
         self._thread.clear()
+
+    def _compute_mood(self) -> str:
+        """Return an emoji representing the agent's current mood.
+
+        Mood is derived from ``self._state``:
+        - ``"idle"``      → 😴 (sleeping)
+        - ``"thinking"``  → 🤔 (thinking)
+        - ``"error"``     → 😡 (frustrated)
+        - ``"success"``   → 😊 (happy)
+        """
+        return {
+            "idle": "\U0001f634",      # 😴
+            "thinking": "\U0001f914",  # 🤔
+            "error": "\U0001f621",     # 😡
+            "success": "\U0001f60a",   # 😊
+        }.get(self._state, "\U0001f634")
 
     # ------------------------------------------------------------------ #
     # Internal loop
@@ -193,6 +216,7 @@ class LLMAgent:
             response = await self._call_llm(thread)
             if response is None:
                 # All retries exhausted.
+                self._state = "error"
                 return
 
             # The LLM has now processed everything up to pre_call_len.
@@ -201,6 +225,7 @@ class LLMAgent:
 
             if not response.tool_calls:
                 # Plain text response -- agent is done for this turn.
+                self._state = "success"
                 if response.content:
                     thread.append({"role": "assistant", "content": response.content})
                     self._recorder.record(
@@ -238,6 +263,7 @@ class LLMAgent:
                     }
                 )
         else:
+            self._state = "error"
             logger.warning(
                 "Agent %r hit max loop iterations (%d) -- forcing stop",
                 self.name,
