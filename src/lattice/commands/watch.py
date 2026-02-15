@@ -281,6 +281,7 @@ class WatchApp(App[None]):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("t", "toggle_tools", "Toggle tools"),
     ]
 
     def __init__(
@@ -292,6 +293,7 @@ class WatchApp(App[None]):
         all_agents: dict[str, Any] | None = None,
         heartbeat: Any = None,
         shutdown_event: asyncio.Event | None = None,
+        show_tools: bool = False,
     ) -> None:
         """Initialize the watch app.
 
@@ -303,6 +305,7 @@ class WatchApp(App[None]):
             all_agents: Dict of all agents (for combined mode commands)
             heartbeat: Heartbeat monitor (for /status command)
             shutdown_event: Shutdown event to signal graceful shutdown
+            show_tools: Whether to show tool call events in the event feed
         """
         super().__init__()
         self.session_file = session_file
@@ -312,6 +315,7 @@ class WatchApp(App[None]):
         self.all_agents = all_agents or {}
         self.heartbeat = heartbeat
         self.shutdown_event = shutdown_event
+        self.show_tools = show_tools
 
         # State
         self.agents: dict[str, AgentState] = {}
@@ -351,6 +355,12 @@ class WatchApp(App[None]):
     def on_unmount(self) -> None:
         """Handle app shutdown."""
         self._stop_watching = True
+
+    def action_toggle_tools(self) -> None:
+        """Toggle tool call visibility in the event feed."""
+        self.show_tools = not self.show_tools
+        state = "shown" if self.show_tools else "hidden"
+        self.notify(f"Tool calls {state} (press t to toggle)", timeout=3)
 
     def action_quit(self) -> None:
         """Override quit action to trigger graceful shutdown in combined mode."""
@@ -490,14 +500,13 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = f"calling {tool_name}"
 
-            # Format args briefly
-            args_str = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:2])
-            if len(args) > 2:
-                args_str += ", ..."
-
-            self._add_event_line(
-                f"[cyan]Tool call[/cyan]: {agent_name}.{tool_name}({args_str})"
-            )
+            if self.show_tools:
+                args_str = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:2])
+                if len(args) > 2:
+                    args_str += ", ..."
+                self._add_event_line(
+                    f"[cyan]Tool call[/cyan]: {agent_name}.{tool_name}({args_str})"
+                )
 
         elif event_type == "tool_result":
             agent_name = event_dict["agent"]
@@ -507,9 +516,10 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = "processing"
 
-            self._add_event_line(
-                f"[cyan]Tool result[/cyan]: {agent_name}.{tool_name} ({duration_ms}ms)"
-            )
+            if self.show_tools:
+                self._add_event_line(
+                    f"[cyan]Tool result[/cyan]: {agent_name}.{tool_name} ({duration_ms}ms)"
+                )
 
         elif event_type == "status":
             agent_name = event_dict["agent"]
@@ -553,14 +563,13 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = f"calling {tool_name}"
 
-            # Format args briefly
-            args_str = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:2])
-            if len(args) > 2:
-                args_str += ", ..."
-
-            self._add_event_line(
-                f"[cyan]{agent_name}[/cyan]: {tool_name}({args_str})"
-            )
+            if self.show_tools:
+                args_str = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:2])
+                if len(args) > 2:
+                    args_str += ", ..."
+                self._add_event_line(
+                    f"[cyan]{agent_name}[/cyan]: {tool_name}({args_str})"
+                )
 
         elif event_type == "cli_thinking":
             agent_name = event_dict["agent"]
@@ -719,7 +728,7 @@ def watch(verbose: bool, session_file: Path | None) -> None:
             raise SystemExit(1)
         click.echo(f"Watching: {session_file}")
 
-    app = WatchApp(session_file=session_file, enable_input=False)
+    app = WatchApp(session_file=session_file, enable_input=False, show_tools=verbose)
     app.run()
 
 
