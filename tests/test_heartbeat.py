@@ -338,7 +338,7 @@ class TestHeartbeatThreadIsolation:
 
         # Send a user message first
         await agent.handle_message("user", "hello")
-        assert "user" in agent._threads
+        assert len(agent._thread) == 2  # user msg + assistant reply
 
         # Now send a heartbeat message
         provider._responses = [
@@ -347,10 +347,8 @@ class TestHeartbeatThreadIsolation:
         provider._call_count = 0
         await agent.handle_message("__system__", "status?")
 
-        # Should have separate threads
-        assert "__system__" in agent._threads
-        assert len(agent._threads["user"]) == 2  # user msg + assistant reply
-        assert len(agent._threads["__system__"]) == 2
+        # Single thread should contain all messages (user + system)
+        assert len(agent._thread) == 4  # 2 from user + 2 from system
         recorder.close()
 
 

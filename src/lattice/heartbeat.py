@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 _HEARTBEAT_PROMPT = (
     "Briefly update the user on current progress. "
     "If all tasks are complete, include the marker [HEARTBEAT:DONE]. "
-    "If you are stuck or waiting for input, include the marker [HEARTBEAT:STUCK]."
+    "If you are stuck and unable to make progress (e.g. hit an error, "
+    "need human input), include [HEARTBEAT:STUCK]. "
+    "Note: waiting for other agents to finish their work is normal — "
+    "do NOT report STUCK just because you sent messages and are "
+    "waiting for replies."
 )
 
 #: Pattern to detect done/stuck markers in heartbeat responses.
@@ -31,9 +35,8 @@ class Heartbeat:
     """Sends periodic heartbeat messages to the entry agent.
 
     The heartbeat fires every *interval* seconds, sending a system-level
-    message through the router.  The entry agent handles it in a dedicated
-    ``"__system__"`` conversation thread so heartbeat context never
-    pollutes peer threads.
+    message through the router.  The entry agent handles it in its
+    unified conversation thread alongside all other messages.
     """
 
     def __init__(
@@ -52,6 +55,7 @@ class Heartbeat:
         self._task: asyncio.Task[None] | None = None
         self._paused = False
         self._done_flag = False
+        self._pending = False
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -90,6 +94,24 @@ class Heartbeat:
         """True if the entry agent signalled completion."""
         return self._done_flag
 
+    def consume_pending(self) -> bool:
+        """Return ``True`` (once) if a heartbeat response is expected.
+
+        Atomically clears the pending flag so only the first call after
+        a heartbeat send returns ``True``.
+        """
+        if self._pending:
+            self._pending = False
+            return True
+        return False
+
+    @staticmethod
+    def strip_markers(content: str) -> str:
+        """Remove ``[HEARTBEAT:DONE]`` / ``[HEARTBEAT:STUCK]`` markers."""
+        result = _DONE_RE.sub("", content)
+        result = _STUCK_RE.sub("", result)
+        return result.strip()
+
     # ------------------------------------------------------------------ #
     # Internal
     # ------------------------------------------------------------------ #
@@ -115,6 +137,7 @@ class Heartbeat:
 
     async def _send_heartbeat(self) -> None:
         """Send a single heartbeat message and record a status event."""
+        self._pending = True
         self._recorder.record(
             StatusEvent(
                 ts="",

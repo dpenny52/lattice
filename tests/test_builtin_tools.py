@@ -560,7 +560,7 @@ class TestToolRegistryBackwardCompat:
         reg = ToolRegistry("agent-a", router, recorder)
         result = await reg.execute(
             "send_message",
-            {"to": "agent-b", "content": "hi", "wait_for_reply": False},
+            {"to": "agent-b", "content": "hi"},
         )
         data = json.loads(result)
         assert data["status"] == "sent"

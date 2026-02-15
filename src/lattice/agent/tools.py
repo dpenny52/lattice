@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -16,7 +15,7 @@ from lattice.agent.builtin_tools import (
     handle_file_write,
     handle_web_search,
 )
-from lattice.session.models import StatusEvent, ToolCallEvent, ToolResultEvent
+from lattice.session.models import ToolCallEvent, ToolResultEvent
 
 if TYPE_CHECKING:
     from lattice.router.router import Router
@@ -24,16 +23,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Timeout (seconds) for blocking send_message with wait_for_reply=true.
-_SEND_MESSAGE_TIMEOUT = 300.0
-
-
 SEND_MESSAGE_TOOL: dict[str, Any] = {
     "name": "send_message",
     "description": (
-        "Send a message to another agent on your team. "
-        "By default, waits for the target agent to reply and returns their "
-        "response. Set wait_for_reply to false for fire-and-forget."
+        "Send a message to another agent on your team (fire-and-forget). "
+        "The message is dispatched asynchronously; you will not receive "
+        "the reply inline. Replies arrive as new messages in your conversation."
     ),
     "input_schema": {
         "type": "object",
@@ -45,14 +40,6 @@ SEND_MESSAGE_TOOL: dict[str, Any] = {
             "content": {
                 "type": "string",
                 "description": "The message content",
-            },
-            "wait_for_reply": {
-                "type": "boolean",
-                "description": (
-                    "If true (default), block until the target agent replies "
-                    "and return their response. If false, send and return immediately."
-                ),
-                "default": True,
             },
         },
         "required": ["to", "content"],
@@ -174,49 +161,8 @@ class ToolRegistry:
         raise ValueError(msg)
 
     async def _handle_send_message(self, arguments: dict[str, Any]) -> str:
-        """Dispatch a message through the router.
-
-        When ``wait_for_reply`` is true (default), registers a response
-        channel and blocks until the target agent replies.
-        """
+        """Dispatch a message through the router (fire-and-forget)."""
         to = arguments.get("to", "")
         content = arguments.get("content", "")
-        wait = arguments.get("wait_for_reply", True)
-
-        if not wait:
-            # Fire-and-forget: original behavior.
-            await self._router.send(self._agent_name, to, content)
-            return json.dumps({"status": "sent", "to": to})
-
-        # Blocking mode: register a response channel before sending.
-        future = self._router.expect_response(
-            from_agent=to, to_agent=self._agent_name
-        )
-        try:
-            await self._router.send(self._agent_name, to, content)
-        except Exception:
-            self._router.cancel_response(from_agent=to, to_agent=self._agent_name)
-            raise
-
-        # Record a status event so watch TUI shows the waiting state.
-        self._recorder.record(
-            StatusEvent(
-                ts="", seq=0, agent=self._agent_name, status=f"waiting for {to}"
-            )
-        )
-
-        try:
-            response = await asyncio.wait_for(future, timeout=_SEND_MESSAGE_TIMEOUT)
-        except TimeoutError:
-            self._router.cancel_response(from_agent=to, to_agent=self._agent_name)
-            return json.dumps({
-                "status": "error",
-                "error": f"Timed out waiting for reply from '{to}' "
-                         f"after {_SEND_MESSAGE_TIMEOUT:.0f}s",
-            })
-
-        return json.dumps({
-            "status": "reply_received",
-            "from": to,
-            "content": response,
-        })
+        await self._router.send(self._agent_name, to, content)
+        return json.dumps({"status": "sent", "to": to})

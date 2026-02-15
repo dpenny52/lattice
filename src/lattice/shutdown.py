@@ -71,11 +71,8 @@ class ShutdownManager:
     # ------------------------------------------------------------------ #
 
     async def _signal(self) -> None:
-        """Stop accepting input, cancel response channels, and stop heartbeat."""
+        """Stop accepting input and stop heartbeat."""
         self._shutdown_event.set()
-
-        # Unblock any agents waiting for responses before stopping heartbeat.
-        self._router.cancel_all_responses()
 
         if self._heartbeat is not None:
             await self._heartbeat.stop()

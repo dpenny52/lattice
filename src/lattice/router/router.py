@@ -49,14 +49,6 @@ class Router:
         self._agents: dict[str, Agent] = {}
         self._pending_tasks: set[asyncio.Task[None]] = set()
 
-        # Response channels: (from_agent, to_agent) -> Future[str]
-        # "to_agent is waiting for from_agent to respond"
-        self._response_channels: dict[tuple[str, str], asyncio.Future[str]] = {}
-
-        # Track which agent pair a dispatch task belongs to, so failed
-        # tasks can resolve any waiting response channel.
-        self._task_agent_map: dict[asyncio.Task[None], tuple[str, str]] = {}
-
     @property
     def pending_tasks(self) -> set[asyncio.Task[None]]:
         """Currently in-flight dispatch tasks."""
@@ -65,41 +57,6 @@ class Router:
     def register(self, name: str, agent: Agent) -> None:
         """Register an agent by name."""
         self._agents[name] = agent
-
-    # ------------------------------------------------------------------ #
-    # Response channels
-    # ------------------------------------------------------------------ #
-
-    def expect_response(self, from_agent: str, to_agent: str) -> asyncio.Future[str]:
-        """Register a response channel: *to_agent* is waiting for *from_agent* to reply.
-
-        Returns a Future that will be resolved when *from_agent* sends a
-        message back to *to_agent* via ``send()``.
-
-        Raises ``RuntimeError`` if a channel already exists for this pair.
-        """
-        key = (from_agent, to_agent)
-        if key in self._response_channels:
-            msg = f"Duplicate response channel: {from_agent} -> {to_agent}"
-            raise RuntimeError(msg)
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str] = loop.create_future()
-        self._response_channels[key] = future
-        return future
-
-    def cancel_response(self, from_agent: str, to_agent: str) -> None:
-        """Remove and cancel a pending response channel."""
-        key = (from_agent, to_agent)
-        future = self._response_channels.pop(key, None)
-        if future is not None and not future.done():
-            future.cancel()
-
-    def cancel_all_responses(self) -> None:
-        """Cancel all pending response channels (used during shutdown)."""
-        for future in self._response_channels.values():
-            if not future.done():
-                future.cancel()
-        self._response_channels.clear()
 
     async def send(
         self,
@@ -146,20 +103,10 @@ class Router:
                 + preview
             )
 
-        # Check for a pending response channel: if to_agent previously
-        # registered that it's waiting for from_agent, resolve the future
-        # directly instead of dispatching handle_message.
-        channel_key = (from_agent, to_agent)
-        future = self._response_channels.pop(channel_key, None)
-        if future is not None and not future.done():
-            future.set_result(content)
-            return
-
         # Dispatch asynchronously — task is tracked to prevent GC
         agent = self._agents[to_agent]
         task = asyncio.create_task(agent.handle_message(from_agent, content))
         self._pending_tasks.add(task)
-        self._task_agent_map[task] = (from_agent, to_agent)
         task.add_done_callback(self._task_done)
 
     async def broadcast(
@@ -233,26 +180,7 @@ class Router:
         """Callback for fire-and-forget tasks — log errors, remove from set."""
         self._pending_tasks.discard(task)
 
-        # Look up which agent pair this task was dispatching to.
-        agent_pair = self._task_agent_map.pop(task, None)
-
         if not task.cancelled():
             exc = task.exception()
             if exc is not None:
                 logger.error("Dispatch error: %s", exc)
-
-                # If anyone is waiting for a response from the target agent
-                # (to_agent), resolve their future with an error message.
-                if agent_pair is not None:
-                    _from, to = agent_pair
-                    # Find channels where to_agent is the responder.
-                    keys_to_resolve = [
-                        k for k in self._response_channels
-                        if k[0] == to
-                    ]
-                    for key in keys_to_resolve:
-                        future = self._response_channels.pop(key, None)
-                        if future is not None and not future.done():
-                            future.set_result(
-                                f"Error: agent '{to}' failed: {exc}"
-                            )

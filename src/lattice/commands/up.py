@@ -410,8 +410,27 @@ async def _run_tui_app(app: "WatchApp") -> None:  # type: ignore[name-defined]
 
 
 def _read_input() -> str:
-    """Blocking input() wrapper for use with ``run_in_executor``."""
-    return input("> ")
+    r"""Blocking input() wrapper for use with ``run_in_executor``.
+
+    Supports multi-line input via backslash continuation:
+    - Lines ending with `\` continue to the next line
+    - Final line without `\` sends the complete message
+    """
+    lines: list[str] = []
+    prompt = "> "
+
+    while True:
+        line = input(prompt)
+
+        # Check for continuation (backslash at end)
+        if line.endswith("\\"):
+            # Remove the backslash and continue
+            lines.append(line[:-1])
+            prompt = "... "
+        else:
+            # Final line, combine and return
+            lines.append(line)
+            return "\n".join(lines)
 
 
 async def _handle_command(

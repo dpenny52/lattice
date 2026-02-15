@@ -215,8 +215,7 @@ class TestOnResponseCallback:
         # Should not raise
         await agent.handle_message("user", "hello")
 
-        thread = agent._threads["user"]
-        assert thread[-1]["content"] == "Hello from agent!"
+        assert agent._thread[-1]["content"] == "Hello from agent!"
         recorder.close()
 
 
@@ -507,3 +506,92 @@ class TestEdgeCases:
         from lattice.router.router import Agent
 
         assert isinstance(UserAgent(), Agent)
+
+
+# ================================================================== #
+# Multi-line input
+# ================================================================== #
+
+
+class TestMultiLineInput:
+    async def test_multiline_with_continuation(self, tmp_path: Path) -> None:
+        """Backslash at end of line continues to next line."""
+        router, recorder = _make_router(tmp_path)
+        entry_mock = MagicMock()
+        entry_mock.handle_message = AsyncMock()
+        router.register("entry", entry_mock)
+
+        agents = {"entry": MagicMock(spec=LLMAgent)}
+        shutdown = asyncio.Event()
+
+        # User types: "line 1\" → "line 2\" → "line 3" → "/done"
+        # This should produce a single message "line 1\nline 2\nline 3"
+        inputs = iter(["line 1\\", "line 2\\", "line 3", "/done"])
+        with patch("builtins.input", side_effect=inputs):
+            await _repl_loop(router, "entry", agents, shutdown)
+
+        await asyncio.sleep(0.05)
+        entry_mock.handle_message.assert_called_once_with(
+            "user", "line 1\nline 2\nline 3"
+        )
+        recorder.close()
+
+    async def test_multiline_routes_to_at_agent(self, tmp_path: Path) -> None:
+        """Multi-line input works with @agent syntax."""
+        router, recorder = _make_router(tmp_path)
+        writer_mock = MagicMock()
+        writer_mock.handle_message = AsyncMock()
+        router.register("writer", writer_mock)
+
+        agents = {"writer": MagicMock(spec=LLMAgent)}
+        shutdown = asyncio.Event()
+
+        # "@writer Please write a\", "multi-line\", "message"
+        inputs = iter(["@writer Please write a\\", "multi-line\\", "message", "/done"])
+        with patch("builtins.input", side_effect=inputs):
+            await _repl_loop(router, "entry", agents, shutdown)
+
+        await asyncio.sleep(0.05)
+        writer_mock.handle_message.assert_called_once_with(
+            "user", "Please write a\nmulti-line\nmessage"
+        )
+        recorder.close()
+
+    async def test_single_line_without_continuation(self, tmp_path: Path) -> None:
+        """Lines without backslash send immediately."""
+        router, recorder = _make_router(tmp_path)
+        entry_mock = MagicMock()
+        entry_mock.handle_message = AsyncMock()
+        router.register("entry", entry_mock)
+
+        agents = {"entry": MagicMock(spec=LLMAgent)}
+        shutdown = asyncio.Event()
+
+        inputs = iter(["just one line", "/done"])
+        with patch("builtins.input", side_effect=inputs):
+            await _repl_loop(router, "entry", agents, shutdown)
+
+        await asyncio.sleep(0.05)
+        entry_mock.handle_message.assert_called_once_with("user", "just one line")
+        recorder.close()
+
+    async def test_empty_line_with_continuation_ignored(
+        self, tmp_path: Path
+    ) -> None:
+        """Empty continuation lines are included in the message."""
+        router, recorder = _make_router(tmp_path)
+        entry_mock = MagicMock()
+        entry_mock.handle_message = AsyncMock()
+        router.register("entry", entry_mock)
+
+        agents = {"entry": MagicMock(spec=LLMAgent)}
+        shutdown = asyncio.Event()
+
+        # "first\", "", "last" should produce "first\n\nlast"
+        inputs = iter(["first\\", "\\", "last", "/done"])
+        with patch("builtins.input", side_effect=inputs):
+            await _repl_loop(router, "entry", agents, shutdown)
+
+        await asyncio.sleep(0.05)
+        entry_mock.handle_message.assert_called_once_with("user", "first\n\nlast")
+        recorder.close()

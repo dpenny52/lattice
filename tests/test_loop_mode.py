@@ -321,7 +321,7 @@ class TestContextReset:
 
         # Send a message to populate the agent's thread
         await agent.handle_message("user", "initial message")
-        assert len(agent._threads.get("user", [])) > 0
+        assert len(agent._thread) > 0
 
         # Run one loop iteration
         with patch("lattice.commands.up._read_input", return_value="test"):
@@ -329,13 +329,11 @@ class TestContextReset:
                 router, "agent-a", all_agents, agents, shutdown_event, None, recorder, 1
             )
 
-        # After reset, the user thread should have been cleared and repopulated
-        # The thread should exist (because we sent a message during the loop)
+        # After reset, the thread should have been cleared and repopulated
         # but should not contain the "initial message" from before the loop
-        user_thread = agent._threads.get("user", [])
-        # Check that the thread was reset by verifying we don't have the old message
         initial_msg_found = any(
-            msg.get("content") == "initial message" for msg in user_thread
+            msg.get("content") == "[from user]: initial message"
+            for msg in agent._thread
         )
         assert not initial_msg_found
 

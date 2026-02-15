@@ -138,10 +138,9 @@ class TestLLMAgentBasic:
 
         assert provider._call_count == 1
         # The thread should have the user message + assistant response.
-        thread = agent._threads["user"]
-        assert len(thread) == 2
-        assert thread[0]["content"] == "hi there"
-        assert thread[1]["content"] == "Hello!"
+        assert len(agent._thread) == 2
+        assert agent._thread[0]["content"] == "[from user]: hi there"
+        assert agent._thread[1]["content"] == "Hello!"
 
     async def test_empty_response_no_crash(
         self, router: Router, recorder: SessionRecorder
@@ -157,9 +156,8 @@ class TestLLMAgentBasic:
 
         assert provider._call_count == 1
         # Thread should only have the user message (no assistant entry).
-        thread = agent._threads["user"]
-        assert len(thread) == 1
-        assert thread[0]["content"] == "hi"
+        assert len(agent._thread) == 1
+        assert agent._thread[0]["content"] == "[from user]: hi"
 
     async def test_unknown_tool_returns_error(
         self, router: Router, recorder: SessionRecorder
@@ -187,8 +185,7 @@ class TestLLMAgentBasic:
 
         assert provider._call_count == 2
         # The tool result in the thread should contain the error.
-        thread = agent._threads["user"]
-        tool_results = [m for m in thread if m.get("role") == "tool"]
+        tool_results = [m for m in agent._thread if m.get("role") == "tool"]
         assert len(tool_results) == 1
         assert "Error" in tool_results[0]["content"]
         assert "Unknown tool" in tool_results[0]["content"]
@@ -209,7 +206,6 @@ class TestLLMAgentBasic:
                         arguments={
                             "to": "agent-b",
                             "content": "hey b!",
-                            "wait_for_reply": False,
                         },
                     )
                 ],
@@ -246,7 +242,6 @@ class TestLLMAgentBasic:
                         arguments={
                             "to": "agent-b",
                             "content": "msg1",
-                            "wait_for_reply": False,
                         },
                     )
                 ],
@@ -261,7 +256,6 @@ class TestLLMAgentBasic:
                         arguments={
                             "to": "agent-b",
                             "content": "msg2",
-                            "wait_for_reply": False,
                         },
                     )
                 ],
@@ -282,45 +276,6 @@ class TestLLMAgentBasic:
 
         assert provider._call_count == 3
         assert agent_b.handle_message.call_count == 2
-
-
-class TestPerPeerThreading:
-    """Messages from different peers get separate threads."""
-
-    async def test_separate_threads(
-        self, router: Router, recorder: SessionRecorder
-    ) -> None:
-        provider = MockProvider(
-            [
-                LLMResponse(content="Reply to alice.", usage=TokenUsage(5, 3)),
-                LLMResponse(content="Reply to bob.", usage=TokenUsage(5, 3)),
-            ]
-        )
-        agent = _make_agent(router, recorder, provider, peer_names=["alice", "bob"])
-        router.register("agent-a", agent)
-
-        await agent.handle_message("alice", "hello from alice")
-        await agent.handle_message("bob", "hello from bob")
-
-        assert "alice" in agent._threads
-        assert "bob" in agent._threads
-
-        # Each thread has its own messages.
-        assert agent._threads["alice"][0]["content"] == "hello from alice"
-        assert agent._threads["bob"][0]["content"] == "hello from bob"
-
-        # Provider was called twice with different thread contents.
-        assert len(provider.calls) == 2
-        # First call should have alice's message.
-        first_user_msgs = [
-            m for m in provider.calls[0]["messages"] if m["role"] == "user"
-        ]
-        assert first_user_msgs[0]["content"] == "hello from alice"
-        # Second call should have bob's message.
-        second_user_msgs = [
-            m for m in provider.calls[1]["messages"] if m["role"] == "user"
-        ]
-        assert second_user_msgs[0]["content"] == "hello from bob"
 
 
 class TestTeamContext:
@@ -404,8 +359,7 @@ class TestEventRecording:
                             arguments={
                                 "to": "agent-b",
                                 "content": "hi",
-                                "wait_for_reply": False,
-                            },
+                                },
                         )
                     ],
                     usage=TokenUsage(10, 5),
@@ -461,8 +415,7 @@ class TestRetryBehavior:
         finally:
             llm_mod._BASE_DELAY = original_delay
 
-        thread = agent._threads["user"]
-        assert thread[-1]["content"] == "recovered!"
+        assert agent._thread[-1]["content"] == "recovered!"
 
     async def test_retries_exhausted(
         self, router: Router, recorder: SessionRecorder
