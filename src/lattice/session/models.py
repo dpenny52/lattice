@@ -135,6 +135,14 @@ class LoopBoundaryEvent(_EventBase):
     iteration: int = Field(ge=1, description="Loop iteration number (1-indexed)")
 
 
+class AgentResponseEvent(_EventBase):
+    """Emitted when an LLM agent produces a text response."""
+
+    type: Literal["agent_response"] = "agent_response"
+    agent: str = Field(description="Agent name")
+    content: str = Field(description="Response text")
+
+
 class CLITextChunkEvent(_EventBase):
     """Emitted when a CLI agent outputs a text chunk (streaming)."""
 
@@ -188,6 +196,7 @@ SessionEvent = Annotated[
     | Annotated[AgentStartEvent, Tag("agent_start")]
     | Annotated[AgentDoneEvent, Tag("agent_done")]
     | Annotated[LoopBoundaryEvent, Tag("loop_boundary")]
+    | Annotated[AgentResponseEvent, Tag("agent_response")]
     | Annotated[CLITextChunkEvent, Tag("cli_text_chunk")]
     | Annotated[CLIToolCallEvent, Tag("cli_tool_call")]
     | Annotated[CLIThinkingEvent, Tag("cli_thinking")]

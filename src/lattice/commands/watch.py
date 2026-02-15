@@ -19,6 +19,7 @@ from textual.widgets import Footer, Header, Input, Label, Static
 
 from lattice.session.models import (
     AgentDoneEvent,
+    AgentResponseEvent,
     AgentStartEvent,
     CLIProgressEvent,
     CLITextChunkEvent,
@@ -538,6 +539,21 @@ class WatchApp(App[None]):
             retry_str = " (retrying)" if retrying else ""
             self._add_event_line(
                 f"[red]Error[/red]: {agent_name}: {error}{retry_str}"
+            )
+
+        elif event_type == "agent_response":
+            agent_name = event_dict["agent"]
+            content = event_dict["content"]
+            if agent_name in self.agents:
+                self.agents[agent_name].current_activity = "responded"
+
+            # Truncate long responses for display
+            display_content = content[:120].replace("\n", " ")
+            if len(content) > 120:
+                display_content += "..."
+
+            self._add_event_line(
+                f"[green]{agent_name}[/green]: {display_content}"
             )
 
         elif event_type == "cli_text_chunk":

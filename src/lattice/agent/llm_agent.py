@@ -15,6 +15,7 @@ from lattice.agent.tools import ToolRegistry
 from lattice.router.router import Router
 from lattice.session.models import (
     AgentDoneEvent,
+    AgentResponseEvent,
     AgentStartEvent,
     ErrorEvent,
     LLMCallEndEvent,
@@ -192,6 +193,11 @@ class LLMAgent:
                 # Plain text response -- agent is done for this turn.
                 if response.content:
                     thread.append({"role": "assistant", "content": response.content})
+                    self._recorder.record(
+                        AgentResponseEvent(
+                            ts="", seq=0, agent=self.name, content=response.content,
+                        )
+                    )
                     if self._on_response is not None:
                         try:
                             await self._on_response(response.content)
