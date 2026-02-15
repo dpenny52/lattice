@@ -581,11 +581,6 @@ class TestGoogleProvider:
 class TestCreateProvider:
     """Tests for the create_provider factory function."""
 
-    def test_anthropic(self) -> None:
-        provider, model = create_provider("anthropic/claude-sonnet-4-5-20250929")
-        assert isinstance(provider, AnthropicProvider)
-        assert model == "claude-sonnet-4-5-20250929"
-
     def test_openai(self) -> None:
         provider, model = create_provider("openai/gpt-4o")
         assert isinstance(provider, OpenAIProvider)

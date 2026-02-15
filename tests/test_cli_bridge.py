@@ -135,6 +135,11 @@ def _make_mock_claude_process(
             "type": "assistant",
             "message": {"content": [{"type": "text", "text": text_response}]},
         }).encode() + b"\n")
+        # Claude CLI always emits a final "result" event with the aggregated text.
+        stdout.feed(json.dumps({
+            "type": "result",
+            "result": text_response,
+        }).encode() + b"\n")
 
     return proc, stdout
 
@@ -306,10 +311,15 @@ class TestClaudeAdapter:
             task = asyncio.create_task(bridge.handle_message("user", "analyze this"))
             await asyncio.sleep(0.01)
 
-            # Feed streaming result (real Claude CLI format).
+            # Feed streaming events (real Claude CLI format).
             stdout.feed(json.dumps({
                 "type": "assistant",
                 "message": {"content": [{"type": "text", "text": "Analysis complete"}]},
+            }).encode() + b"\n")
+            # Claude CLI emits a final "result" event with the aggregated text.
+            stdout.feed(json.dumps({
+                "type": "result",
+                "result": "Analysis complete",
             }).encode() + b"\n")
             stdout.close()
 
@@ -949,6 +959,10 @@ class TestMessageQueuing:
             stdout_1.feed(json.dumps({
                 "type": "assistant",
                 "message": {"content": [{"type": "text", "text": "first response"}]},
+            }).encode() + b"\n")
+            stdout_1.feed(json.dumps({
+                "type": "result",
+                "result": "first response",
             }).encode() + b"\n")
             stdout_1.close()
             stdout_2.close()

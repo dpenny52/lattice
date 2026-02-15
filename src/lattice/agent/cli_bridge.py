@@ -445,6 +445,10 @@ class CLIBridge:
 
         elif event_type == "assistant":
             # Assistant message — extract content blocks.
+            # We only record events here (for the watch TUI / session log).
+            # The actual result text comes from the final "result" event,
+            # which is Claude's clean summary — NOT the full transcript of
+            # every text block (which can be enormous for long sessions).
             message = event.get("message")
             if isinstance(message, dict):
                 content_blocks = message.get("content")
@@ -452,7 +456,7 @@ class CLIBridge:
                     for block in content_blocks:
                         if not isinstance(block, dict):
                             continue
-                        current_result = self._dispatch_content_block(block, current_result)
+                        self._dispatch_content_block(block)
 
         elif event_type == "result":
             # Final result — use the aggregated result text.
@@ -463,8 +467,13 @@ class CLIBridge:
         # Ignore "user" (tool result echoes) and unknown types.
         return current_result
 
-    def _dispatch_content_block(self, block: dict[str, object], current_result: str) -> str:
-        """Process a single content block from an assistant message."""
+    def _dispatch_content_block(self, block: dict[str, object]) -> None:
+        """Process a single content block from an assistant message.
+
+        Records events for the session log / watch TUI only.
+        Does NOT accumulate text — the final result comes from the
+        ``result`` event emitted by Claude CLI at the end of the session.
+        """
         block_type = block.get("type")
 
         if block_type == "text":
@@ -473,7 +482,6 @@ class CLIBridge:
                 self._recorder.record(
                     CLITextChunkEvent(ts="", seq=0, agent=self.name, text=text)
                 )
-                current_result += text
 
         elif block_type == "tool_use":
             tool_name = str(block.get("name", ""))
@@ -492,8 +500,6 @@ class CLIBridge:
                 self._recorder.record(
                     CLIThinkingEvent(ts="", seq=0, agent=self.name, content=content)
                 )
-
-        return current_result
 
     async def _process_message_queue(self) -> None:
         """Process queued messages sequentially as follow-ups."""
