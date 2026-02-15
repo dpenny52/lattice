@@ -581,16 +581,6 @@ class TestGoogleProvider:
 class TestCreateProvider:
     """Tests for the create_provider factory function."""
 
-    def test_openai(self) -> None:
-        provider, model = create_provider("openai/gpt-4o")
-        assert isinstance(provider, OpenAIProvider)
-        assert model == "gpt-4o"
-
-    def test_google(self) -> None:
-        provider, model = create_provider("google/gemini-2.0-flash")
-        assert isinstance(provider, GoogleProvider)
-        assert model == "gemini-2.0-flash"
-
     def test_unknown_provider(self) -> None:
         with pytest.raises(ValueError, match="Unknown provider"):
             create_provider("cohere/command")

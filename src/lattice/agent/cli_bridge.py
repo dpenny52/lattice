@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shlex
 from collections.abc import Awaitable, Callable
 
@@ -32,6 +33,9 @@ _SIGTERM_WAIT = 3.0
 
 #: Maximum bytes per JSONL line from subprocess stdout (1 MB).
 _MAX_LINE_BYTES = 1_048_576
+
+#: Env vars stripped from CLI subprocesses so they use subscription auth.
+_STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
 
 
 class CLIBridge:
@@ -251,12 +255,20 @@ class CLIBridge:
 
             cmd_args.append("--dangerously-skip-permissions")
 
+            # Strip LLM API keys so the CLI uses subscription auth
+            # instead of accidentally hitting the API on the user's key.
+            cli_env = {
+                k: v for k, v in os.environ.items()
+                if k not in _STRIPPED_ENV_KEYS
+            }
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_MAX_LINE_BYTES,
+                env=cli_env,
             )
         except FileNotFoundError:
             error_msg = (
