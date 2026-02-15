@@ -61,11 +61,18 @@ The TUI works in two modes: standalone (`lattice watch`) which finds the latest 
 
 `lattice replay <session-id>` opens a post-hoc session debugger TUI. It loads a completed (or in-progress) JSONL session file and lets you step through events one at a time:
 
-- **Arrow keys** (left/right) step backward and forward through events
-- **Filter by agent** to focus on a single agent's activity
-- **Filter by event type** to isolate messages, tool calls, errors, etc.
-- **Event detail view** shows the full payload for the selected event
-- **Session summary** at the top shows metadata (team, duration, token totals)
+| Key          | Action                                          |
+|--------------|-------------------------------------------------|
+| `j` / `Down` | Next event                                      |
+| `k` / `Up`   | Previous event                                  |
+| `g`          | Jump to a specific event by sequence number     |
+| `/`          | Search/filter events by text                    |
+| `a`          | Filter by agent name                            |
+| `t`          | Filter by event type                            |
+| `c`          | Clear all filters                               |
+| `q`          | Quit                                            |
+
+The detail view shows the full JSON payload for the selected event, and the session summary at the top displays metadata (team, duration, token totals).
 
 Session files are the only input — no API keys or running processes needed. You can replay any session from any machine as long as you have the JSONL file.
 
