@@ -52,8 +52,15 @@ A verbose sidecar file (`*.verbose.jsonl`) stores full tool results matched by s
 
 - **Agents panel** — each agent's current state (active, standby, waiting, errored) and what it's doing right now
 - **Messages panel** — real-time inter-agent message flow with sender/receiver labels
-- **Events panel** — scrolling log of all session events (LLM calls, tool use, errors)
+- **Events panel** — scrolling log of all session events (LLM calls, messages, errors)
 - **Session stats** — token usage, message count, duration, loop iteration
+
+Tool call events are hidden by default to keep the event feed readable. Use `-v` to show them on startup, or press `t` to toggle visibility live.
+
+| Key | Action              |
+|-----|---------------------|
+| `t` | Toggle tool calls   |
+| `q` | Quit                |
 
 The TUI works in two modes: standalone (`lattice watch`) which finds the latest session in `sessions/`, and combined mode (`lattice up --watch`) which embeds the TUI directly into the session runner. Both modes tail the same JSONL file and render identically.
 
