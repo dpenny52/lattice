@@ -16,6 +16,7 @@ from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
 from lattice.heartbeat import SYSTEM_SENDER, Heartbeat
+from lattice.memory_monitor import MemoryMonitor
 from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router
 from lattice.session.models import LoopBoundaryEvent
@@ -218,6 +219,13 @@ async def _run_session(
     if entry in agents:
         _install_heartbeat_hook(agents[entry], heartbeat)
 
+    # 8. Create memory monitor
+    mem_monitor = MemoryMonitor(
+        recorder=recorder,
+        shutdown_event=shutdown_event,
+    )
+    await mem_monitor.start()
+
     # Track why we're shutting down and loop count
     shutdown_reason = "user_shutdown"
     loop_count = 0
@@ -245,6 +253,8 @@ async def _run_session(
                 router, entry, all_agents, shutdown_event, heartbeat,
             )
     finally:
+        await mem_monitor.stop()
+
         # Create shutdown manager with loop count
         shutdown_mgr = ShutdownManager(
             router=router,
