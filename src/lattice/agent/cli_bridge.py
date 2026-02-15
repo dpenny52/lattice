@@ -37,6 +37,10 @@ _MAX_LINE_BYTES = 1_048_576
 #: Env vars stripped from CLI subprocesses so they use subscription auth.
 _STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
 
+#: Max V8 heap size (MB) for Node.js CLI subprocesses (e.g. Claude CLI).
+#: Prevents a single agent from OOM-killing the entire process tree.
+_NODE_HEAP_LIMIT_MB = 4096
+
 
 class CLIBridge:
     """Agent that wraps a CLI subprocess with bidirectional JSONL.
@@ -257,10 +261,15 @@ class CLIBridge:
 
             # Strip LLM API keys so the CLI uses subscription auth
             # instead of accidentally hitting the API on the user's key.
+            # Cap Node.js V8 heap to prevent OOM-killing the process tree.
             cli_env = {
                 k: v for k, v in os.environ.items()
                 if k not in _STRIPPED_ENV_KEYS
             }
+            node_opts = cli_env.get("NODE_OPTIONS", "")
+            if "--max-old-space-size" not in node_opts:
+                separator = " " if node_opts else ""
+                cli_env["NODE_OPTIONS"] = f"{node_opts}{separator}--max-old-space-size={_NODE_HEAP_LIMIT_MB}"
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
@@ -310,9 +319,10 @@ class CLIBridge:
                 await proc.stdout.read()
         except Exception:
             pass
+        stderr_bytes = b""
         try:
             if proc.stderr:
-                await proc.stderr.read()
+                stderr_bytes = await proc.stderr.read()
         except Exception:
             pass
 
@@ -320,8 +330,6 @@ class CLIBridge:
         returncode = await proc.wait()
 
         if returncode != 0:
-            # Read stderr for error details.
-            stderr_bytes = await proc.stderr.read() if proc.stderr else b""
             stderr_text = stderr_bytes.decode(errors="replace").strip()
 
             # Show last 5 lines of stderr for user-friendly output
