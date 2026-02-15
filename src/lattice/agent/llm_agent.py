@@ -37,6 +37,9 @@ _MAX_LOOP_ITERATIONS = 200
 #: Default pause duration (seconds) when a 429 rate limit is hit.
 _RATE_LIMIT_PAUSE = 60.0
 
+#: Tool results above this size (chars) are compacted after the LLM processes them.
+_TOOL_RESULT_COMPACT_THRESHOLD = 1000
+
 
 class RateLimitGate:
     """Shared gate that pauses all LLM calls after any agent hits a 429.
@@ -184,10 +187,17 @@ class LLMAgent:
         tool-call loops (e.g. an LLM that never stops calling tools).
         """
         for _iteration in range(_MAX_LOOP_ITERATIONS):
+            # Everything before this index will have been seen after the call.
+            pre_call_len = len(thread)
+
             response = await self._call_llm(thread)
             if response is None:
                 # All retries exhausted.
                 return
+
+            # The LLM has now processed everything up to pre_call_len.
+            # Compact large tool results it has already seen to free memory.
+            self._compact_tool_results(thread, up_to=pre_call_len)
 
             if not response.tool_calls:
                 # Plain text response -- agent is done for this turn.
@@ -370,6 +380,28 @@ class LLMAgent:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _compact_tool_results(
+        thread: list[dict[str, Any]], *, up_to: int,
+    ) -> None:
+        """Replace large tool results with compact stubs in-place.
+
+        Only touches entries before index *up_to* — those have already been
+        processed by the LLM and no longer need their full content.
+        """
+        for i in range(up_to):
+            entry = thread[i]
+            if entry.get("role") != "tool":
+                continue
+            content = entry.get("content", "")
+            if len(content) <= _TOOL_RESULT_COMPACT_THRESHOLD:
+                continue
+            name = entry.get("name", "unknown")
+            orig_len = len(content)
+            entry["content"] = (
+                f"[{name} result: {orig_len:,} chars — compacted after processing]"
+            )
 
     def _build_messages(self, thread: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Prepend the system prompt to the conversation thread."""
