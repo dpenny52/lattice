@@ -485,16 +485,34 @@ def _make_response_callback(agent_name: str) -> Callable[[str], None]:
 
 
 def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
-    """Wrap the entry agent's ``on_response`` to check heartbeat markers."""
+    """Wrap the entry agent's ``on_response`` to route heartbeat replies.
+
+    Heartbeat responses are sent to ``"user"`` via the router so they
+    appear as proper ``MessageEvent`` entries in the session JSONL.
+    Non-heartbeat responses use the original callback (console print).
+    """
     if not hasattr(agent, "_on_response"):
         return
 
     original_callback = agent._on_response
 
+    # prevent fire-and-forget tasks from being garbage collected
+    _background_tasks: set[asyncio.Task[None]] = set()
+
     def _hooked(content: str) -> None:
-        if original_callback is not None:
-            original_callback(content)
         heartbeat.check_response(content)
+        if heartbeat.consume_pending():
+            # Route heartbeat response to user as a recorded message.
+            clean = heartbeat.strip_markers(content)
+            if clean:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(
+                    agent._router.send(agent.name, "user", clean)
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+        elif original_callback is not None:
+            original_callback(content)
 
     agent._on_response = _hooked
 
