@@ -458,9 +458,6 @@ class WatchApp(App[None]):
             to_agent = event_dict["to"]
             content = event_dict["content"]
 
-            # Truncate long messages
-            display_content = content[:80] + "..." if len(content) > 80 else content
-
             msg = MessageLink(
                 from_agent=from_agent,
                 to_agent=to_agent,
@@ -470,6 +467,7 @@ class WatchApp(App[None]):
             self.messages.append(msg)
             self.stats.message_count += 1
 
+            display_content = content.replace("\n", " ")
             self._add_event_line(
                 f"[blue]Message[/blue]: {from_agent} → {to_agent}: {display_content}"
             )
@@ -547,11 +545,7 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = "responded"
 
-            # Truncate long responses for display
-            display_content = content[:120].replace("\n", " ")
-            if len(content) > 120:
-                display_content += "..."
-
+            display_content = content.replace("\n", " ")
             self._add_event_line(
                 f"[green]{agent_name}[/green]: {display_content}"
             )
@@ -562,11 +556,7 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = "responding"
 
-            # Truncate long text chunks for display
-            display_text = text[:120].replace("\n", " ")
-            if len(text) > 120:
-                display_text += "..."
-
+            display_text = text.replace("\n", " ")
             self._add_event_line(
                 f"[green]{agent_name}[/green]: {display_text}"
             )
