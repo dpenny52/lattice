@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +108,7 @@ class LLMAgent:
         model_override: str | None = None,
         configured_tools: list[str | dict[str, object]] | None = None,
         allowed_paths: list[str] | None = None,
-        on_response: Callable[[str], None] | None = None,
+        on_response: Callable[[str], Awaitable[None]] | None = None,
         rate_gate: RateLimitGate | None = None,
     ) -> None:
         self.name = name
@@ -194,7 +194,7 @@ class LLMAgent:
                     thread.append({"role": "assistant", "content": response.content})
                     if self._on_response is not None:
                         try:
-                            self._on_response(response.content)
+                            await self._on_response(response.content)
                         except Exception:
                             logger.exception("%s: on_response callback failed", self.name)
                 return

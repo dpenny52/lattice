@@ -29,6 +29,13 @@ from lattice.session.recorder import SessionRecorder
 # ------------------------------------------------------------------ #
 
 
+def _async_capture(captured: list[str]) -> Any:
+    """Return an async callback that appends to *captured*."""
+    async def _cb(content: str) -> None:
+        captured.append(content)
+    return _cb
+
+
 def _make_recorder(tmp_path: Path) -> SessionRecorder:
     return SessionRecorder("test-team", "abc123", sessions_dir=tmp_path / "sessions")
 
@@ -227,7 +234,7 @@ class TestCustomCLI:
         bridge = _make_bridge(
             router, recorder,
             command="cat",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         stdout = MockAsyncStdout()
@@ -279,7 +286,7 @@ class TestClaudeAdapter:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         # Mock streaming stdout.
@@ -889,7 +896,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         first_task_started = asyncio.Event()
@@ -961,7 +968,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         call_count = 0
@@ -1063,7 +1070,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         mock_proc, stdout = _make_mock_claude_process(text_response="immediate response")
@@ -1086,7 +1093,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         first_task_started = asyncio.Event()
@@ -1143,7 +1150,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         # First task fails.
@@ -1184,7 +1191,7 @@ class TestMessageQueuing:
         bridge = _make_bridge(
             router, recorder,
             cli_type="claude",
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         num_tasks = 10

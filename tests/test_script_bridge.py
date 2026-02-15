@@ -19,6 +19,13 @@ from lattice.session.recorder import SessionRecorder
 # ------------------------------------------------------------------ #
 
 
+def _async_capture(captured: list[str]) -> Any:
+    """Return an async callback that appends to *captured*."""
+    async def _cb(content: str) -> None:
+        captured.append(content)
+    return _cb
+
+
 def _make_recorder(tmp_path: Path) -> SessionRecorder:
     return SessionRecorder("test-team", "abc123", sessions_dir=tmp_path / "sessions")
 
@@ -200,7 +207,7 @@ class TestOnResponseCallback:
 
         bridge = _make_script_bridge(
             router, recorder,
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
         router.register("script-agent", bridge)
 
@@ -218,7 +225,7 @@ class TestOnResponseCallback:
 
         bridge = _make_script_bridge(
             router, recorder,
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         mock_proc = _make_mock_process(stdout=b"")
@@ -235,7 +242,7 @@ class TestOnResponseCallback:
 
         bridge = _make_script_bridge(
             router, recorder,
-            on_response=lambda c: captured.append(c),
+            on_response=_async_capture(captured),
         )
 
         mock_proc = _make_mock_process(returncode=1, stderr=b"fail")

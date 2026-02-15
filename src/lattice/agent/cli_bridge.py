@@ -7,7 +7,7 @@ import contextlib
 import json
 import logging
 import shlex
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from lattice.router.router import Router
 from lattice.session.models import (
@@ -57,7 +57,7 @@ class CLIBridge:
         peer_names: list[str],
         cli_type: str | None = None,
         command: str | None = None,
-        on_response: Callable[[str], None] | None = None,
+        on_response: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -184,13 +184,13 @@ class CLIBridge:
                             )
                         )
                         if self._on_response:
-                            self._on_response(f"[{self.name} queue full, message rejected]")
+                            await self._on_response(f"[{self.name} queue full, message rejected]")
                         return
 
                     # Queue the message and show feedback.
                     await self._message_queue.put((from_agent, content))
                     if self._on_response:
-                        self._on_response(f"[{self.name} is busy, message queued]")
+                        await self._on_response(f"[{self.name} is busy, message queued]")
                     logger.info(
                         "%s: queued message from %s (queue size: %d)",
                         self.name,
@@ -337,7 +337,7 @@ class CLIBridge:
 
         if result_text:
             if self._on_response:
-                self._on_response(result_text)
+                await self._on_response(result_text)
             # Route the result back to the sender so the conversation continues.
             # Skip routing back to "user" — that's handled by on_response.
             if from_agent != "user":
@@ -509,7 +509,7 @@ class CLIBridge:
 
             # Show user feedback when starting a queued message.
             if self._on_response:
-                self._on_response(f"[{self.name} processing queued message from {from_agent}]")
+                await self._on_response(f"[{self.name} processing queued message from {from_agent}]")
 
             # Record start/done events for each queued task.
             self._recorder.record(
@@ -577,7 +577,7 @@ class CLIBridge:
             logger.error("%s: task %s failed: %s", self.name, task_id, exc)
         else:
             if result and self._on_response:
-                self._on_response(result)
+                await self._on_response(result)
 
     # ------------------------------------------------------------------ #
     # Background read loop

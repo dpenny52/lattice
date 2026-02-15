@@ -29,6 +29,13 @@ from lattice.session.recorder import SessionRecorder
 # ------------------------------------------------------------------ #
 
 
+def _sync_callback(captured: list[str]) -> Any:
+    """Return an async callback that appends to *captured*."""
+    async def _cb(content: str) -> None:
+        captured.append(content)
+    return _cb
+
+
 class MockProvider:
     """Fake LLM provider that returns preconfigured responses."""
 
@@ -135,18 +142,18 @@ class TestUserAgent:
 
 
 class TestResponseCallback:
-    def test_make_response_callback(self, capsys: Any) -> None:
+    async def test_make_response_callback(self, capsys: Any) -> None:
         cb = _make_response_callback("writer")
-        cb("The article is done.")
+        await cb("The article is done.")
         captured = capsys.readouterr()
         assert "[writer] The article is done." in captured.out
 
-    def test_callback_captures_agent_name(self, capsys: Any) -> None:
+    async def test_callback_captures_agent_name(self, capsys: Any) -> None:
         """Each callback is bound to its own agent name."""
         cb_a = _make_response_callback("agent-a")
         cb_b = _make_response_callback("agent-b")
-        cb_a("from a")
-        cb_b("from b")
+        await cb_a("from a")
+        await cb_b("from b")
         captured = capsys.readouterr()
         assert "[agent-a] from a" in captured.out
         assert "[agent-b] from b" in captured.out
@@ -168,7 +175,7 @@ class TestOnResponseCallback:
         agent = _make_test_agent(
             router,
             recorder,
-            on_response=lambda content: captured.append(content),
+            on_response=_sync_callback(captured),
         )
         router.register("agent-a", agent)
 
@@ -197,7 +204,7 @@ class TestOnResponseCallback:
             peer_names=["user"],
             provider=provider,
             model_override="test",
-            on_response=lambda content: captured.append(content),
+            on_response=_sync_callback(captured),
         )
         router.register("agent-a", agent)
 

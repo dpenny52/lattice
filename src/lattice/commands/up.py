@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import signal
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import click
@@ -471,14 +471,14 @@ async def _handle_command(
 # ------------------------------------------------------------------ #
 
 
-def _make_response_callback(agent_name: str) -> Callable[[str], None]:
+def _make_response_callback(agent_name: str) -> Callable[[str], Awaitable[None]]:
     """Return a closure that prints ``[agent_name] text`` to the terminal.
 
     Used as the ``on_response`` callback for ``LLMAgent`` -- fires when
     the agent produces a plain-text response (end of its tool-call loop).
     """
 
-    def _callback(content: str) -> None:
+    async def _callback(content: str) -> None:
         click.echo(f"[{agent_name}] {content}")
 
     return _callback
@@ -496,28 +496,15 @@ def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
 
     original_callback = agent._on_response
 
-    # prevent fire-and-forget tasks from being garbage collected
-    _background_tasks: set[asyncio.Task[None]] = set()
-
-    def _hooked(content: str) -> None:
+    async def _hooked(content: str) -> None:
         heartbeat.check_response(content)
         if heartbeat.consume_pending():
             # Route heartbeat response to user as a recorded message.
             clean = heartbeat.strip_markers(content)
             if clean:
-                try:
-                    loop = asyncio.get_running_loop()
-                    task = loop.create_task(
-                        agent._router.send(agent.name, "user", clean)
-                    )
-                    _background_tasks.add(task)
-                    task.add_done_callback(_background_tasks.discard)
-                except RuntimeError:
-                    # No running event loop — fall back to console print.
-                    if original_callback is not None:
-                        original_callback(clean)
+                await agent._router.send(agent.name, "user", clean)
         elif original_callback is not None:
-            original_callback(content)
+            await original_callback(content)
 
     agent._on_response = _hooked
 

@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import shlex
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from lattice.router.router import Router
 from lattice.session.models import AgentDoneEvent, AgentStartEvent, ErrorEvent
@@ -37,7 +37,7 @@ class ScriptBridge:
         router: Router,
         recorder: SessionRecorder,
         timeout: float = 30.0,
-        on_response: Callable[[str], None] | None = None,
+        on_response: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -136,7 +136,7 @@ class ScriptBridge:
         await self._router.send(self.name, from_agent, stdout_text)
 
         if self._on_response:
-            self._on_response(stdout_text)
+            await self._on_response(stdout_text)
 
     async def shutdown(self) -> None:
         """No-op shutdown -- scripts are stateless."""

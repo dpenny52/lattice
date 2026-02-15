@@ -432,13 +432,17 @@ class TestHeartbeatReplIntegration:
 
 
 class TestHeartbeatHook:
-    def test_install_hook_wraps_callback(self, tmp_path: Path) -> None:
+    async def test_install_hook_wraps_callback(self, tmp_path: Path) -> None:
         """_install_heartbeat_hook wraps the agent's on_response."""
         router, recorder = _make_router(tmp_path)
         provider = MockProvider(
             [LLMResponse(content="hi", usage=TokenUsage(10, 5))]
         )
         captured: list[str] = []
+
+        async def _capture(content: str) -> None:
+            captured.append(content)
+
         agent = LLMAgent(
             name="agent-a",
             model_string="mock/test",
@@ -449,14 +453,14 @@ class TestHeartbeatHook:
             peer_names=["user"],
             provider=provider,
             model_override="test",
-            on_response=lambda content: captured.append(content),
+            on_response=_capture,
         )
 
         heartbeat, _, _, _ = _make_heartbeat(tmp_path)
         _install_heartbeat_hook(agent, heartbeat)
 
-        # Call the hooked callback
-        agent._on_response("All done! [HEARTBEAT:DONE]")  # type: ignore[misc]
+        # Call the hooked callback (now async)
+        await agent._on_response("All done! [HEARTBEAT:DONE]")  # type: ignore[misc]
 
         # Original callback should still fire
         assert captured == ["All done! [HEARTBEAT:DONE]"]
@@ -464,7 +468,7 @@ class TestHeartbeatHook:
         assert heartbeat.done_flag
         recorder.close()
 
-    def test_install_hook_without_original_callback(
+    async def test_install_hook_without_original_callback(
         self, tmp_path: Path,
     ) -> None:
         """Hook works even if agent has no original callback."""
@@ -488,7 +492,7 @@ class TestHeartbeatHook:
         heartbeat, _, _, _ = _make_heartbeat(tmp_path)
         _install_heartbeat_hook(agent, heartbeat)
 
-        # Should not crash
-        agent._on_response("[HEARTBEAT:STUCK]")  # type: ignore[misc]
+        # Should not crash (now async)
+        await agent._on_response("[HEARTBEAT:STUCK]")  # type: ignore[misc]
         assert not heartbeat.done_flag
         recorder.close()
