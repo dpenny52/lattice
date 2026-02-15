@@ -15,7 +15,7 @@ from lattice.agent.llm_agent import LLMAgent, RateLimitGate
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
-from lattice.heartbeat import Heartbeat
+from lattice.heartbeat import SYSTEM_SENDER, Heartbeat
 from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router
 from lattice.session.models import LoopBoundaryEvent
@@ -502,7 +502,7 @@ def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
             # Route heartbeat response to user as a recorded message.
             clean = heartbeat.strip_markers(content)
             if clean:
-                await agent._router.send(agent.name, "user", clean)
+                await agent._router.send(SYSTEM_SENDER, "user", clean)
         elif original_callback is not None:
             await original_callback(content)
 

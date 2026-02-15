@@ -75,8 +75,9 @@ class Router:
             msg = f"Unknown agent '{to_agent}'"
             raise UnknownAgentError(msg)
 
-        # "user" and "__system__" bypass topology — god mode
-        bypassed = from_agent in ("user", "__system__")
+        # "user" and "__system__" bypass topology — god mode.
+        # Sends TO "user" also bypass — "user" isn't in the topology graph.
+        bypassed = from_agent in ("user", "__system__") or to_agent == "user"
         if not bypassed and not self._topology.is_allowed(from_agent, to_agent):
             msg = f"Route from '{from_agent}' to '{to_agent}' is not allowed"
             raise RouteNotAllowedError(msg)
@@ -130,7 +131,9 @@ class Router:
                     logger.warning("Broadcast skip: unknown agent '%s'", target)
                     continue
 
-                bypassed = from_agent in ("user", "__system__")
+                bypassed = (
+                    from_agent in ("user", "__system__") or target == "user"
+                )
                 if not bypassed and not self._topology.is_allowed(
                     from_agent, target
                 ):
