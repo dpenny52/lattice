@@ -10,78 +10,212 @@ Declarative multi-agent orchestration CLI. Define agent teams in YAML, run them 
 uv pip install lattice-cli
 ```
 
-## Usage
+## Quick Start
 
 ```bash
-lattice --help
-lattice init          # scaffold a starter config
-lattice up            # run a session
-lattice down          # remote-shutdown a running session
-lattice watch         # live TUI for the active session
-lattice replay <id>   # replay a recorded session
+lattice init            # creates lattice.yaml + .env.example
+# edit .env with your API keys
+# edit lattice.yaml to define your team
+lattice up              # start the session
 ```
+
+The generated `lattice.yaml` is a working config with two example agents. Edit it to match your use case, then run `lattice up` to start an interactive REPL where you can talk to your agent team.
+
+## Example Configs
+
+**Minimal — two LLM agents in a mesh:**
+
+```yaml
+version: "1"
+team: my-team
+agents:
+  researcher:
+    model: anthropic/claude-sonnet-4-5-20250929
+    role: You research topics and report findings.
+    tools: [web-search]
+  writer:
+    model: openai/gpt-4o
+    role: You write clear, concise content based on research.
+```
+
+**Pipeline — sequential handoff:**
+
+```yaml
+version: "1"
+team: content-pipeline
+agents:
+  drafter:
+    model: anthropic/claude-sonnet-4-5-20250929
+    role: Write a first draft based on the user's request.
+  editor:
+    model: anthropic/claude-sonnet-4-5-20250929
+    role: Improve the draft for clarity and correctness.
+  formatter:
+    type: script
+    command: python format_output.py
+topology:
+  type: pipeline
+  flow: [drafter, editor, formatter]
+```
+
+**Hub — coordinator with workers:**
+
+```yaml
+version: "1"
+team: dev-team
+entry: lead
+agents:
+  lead:
+    model: anthropic/claude-haiku-4-5
+    role: Coordinate the team. Read specs, delegate tasks, review results.
+    tools: [file-read]
+  dev:
+    type: cli
+    cli: claude
+    role: Senior Python developer. Implement what's asked.
+  reviewer:
+    type: cli
+    cli: claude
+    role: Code reviewer. Flag real issues, skip nitpicks.
+  tester:
+    type: script
+    command: python -m pytest tests/ -v --tb=short
+topology:
+  type: hub
+  coordinator: lead
+  workers: [dev, reviewer, tester]
+communication:
+  heartbeat: 30
+```
+
+## REPL
+
+After `lattice up`, you get an interactive prompt:
+
+```
+> tell the team to build a login page        # routes to entry agent
+> @writer rewrite the intro paragraph         # routes directly to writer
+> first line of a \                           # multi-line with backslash
+... multi-line message                        # continuation
+> /status                                     # request progress update
+> /agents                                     # list running agents
+> /done                                       # graceful shutdown
+```
+
+## CLI Reference
+
+### `lattice init`
+
+Scaffold a starter `lattice.yaml` and `.env.example` in the current directory.
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Overwrite existing files |
+
+### `lattice up`
+
+Start the agent team and enter the interactive REPL.
+
+| Flag | Description |
+|------|-------------|
+| `-f, --file PATH` | Config file path (default: `lattice.yaml` in cwd) |
+| `--watch` | Run with the live TUI instead of the plain REPL |
+| `--loop [N]` | Re-run the prompt in a loop, optionally capped at N iterations |
+| `-v, --verbose` | Write full tool results to a verbose sidecar file |
+
+### `lattice down`
+
+Signal a running session to shut down gracefully. Reads the PID from `.lattice/session.pid` and sends SIGTERM.
+
+### `lattice watch`
+
+Open a live TUI that tails the active session.
+
+| Flag | Description |
+|------|-------------|
+| `--session PATH` | Watch a specific session file (default: latest in `sessions/`) |
+| `-v, --verbose` | Show tool call events in the event feed |
+
+Hotkeys: `t` toggle tool calls, `q` quit.
+
+### `lattice replay [SESSION_ID]`
+
+Step through a recorded session event by event. Without a session ID, lists all available sessions.
+
+| Flag | Description |
+|------|-------------|
+| `-d, --sessions-dir PATH` | Session directory (default: `./sessions/`) |
+| `-v, --verbose` | Load full tool results from the verbose sidecar |
+
+Hotkeys: `j`/`k` or arrows to navigate, `g` jump to seq, `/` search, `a` filter by agent, `t` filter by type, `c` clear filters, `q` quit.
+
+## Config Reference
+
+### Top-level fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | string | *required* | Schema version (`"1"`) |
+| `team` | string | *required* | Team name (used in session filenames) |
+| `description` | string | — | Human-readable description |
+| `entry` | string | first agent | Which agent receives user messages |
+| `agents` | dict | *required* | Agent definitions (at least one) |
+| `topology` | object | `{type: mesh}` | Communication topology |
+| `communication` | object | see below | Protocol and recording settings |
+| `allowed_paths` | list | `[]` | Extra directories agents can access |
+
+### Agent fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | string | `llm` | Agent type: `llm`, `cli`, or `script` |
+| `model` | string | — | LLM model (`provider/model-name`) |
+| `role` | string | — | System prompt (inline text or file path) |
+| `tools` | list | `[]` | Available tools (`web-search`, `file-read`, `file-write`, `code-exec`) |
+| `cli` | string | — | CLI tool name for cli agents (e.g. `claude`) |
+| `command` | string | — | Shell command for script agents or custom CLI |
+
+Type requirements: `llm` needs `model` + `role`. `cli` needs `role` + (`cli` or `command`). `script` needs `command`.
+
+### Topology
+
+| Type | Description | Extra fields |
+|------|-------------|-------------|
+| `mesh` | Any agent can message any other | — |
+| `pipeline` | Sequential chain | `flow: [a, b, c]` |
+| `hub` | Workers talk only to coordinator | `coordinator`, `workers` |
+| `custom` | Explicit directed edges | `edges: {a: [b, c]}` |
+
+### Communication
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `protocol` | string | `a2a` | Communication protocol |
+| `record` | bool | `true` | Record session to JSONL |
+| `heartbeat` | int | `20` | Seconds between progress checks (0 to disable) |
 
 ## Session Recording
 
-Every `lattice up` session is recorded to an append-only JSONL file under `sessions/`. Each line is a typed event with a monotonic sequence number and ISO 8601 timestamp:
+Every session is recorded to `sessions/{date}_{team}_{id}.jsonl`. Each line is a typed event with a monotonic sequence number and ISO 8601 timestamp:
 
-| Event type        | Description                                  |
-|-------------------|----------------------------------------------|
-| `session_start`   | Session identity, team name, config hash     |
-| `session_end`     | Reason, duration, aggregate token usage      |
-| `message`         | Inter-agent message (from, to, content)      |
-| `llm_call_start`  | LLM call begins (model, message count)       |
-| `llm_call_end`    | LLM call completes (tokens, duration)        |
-| `tool_call`       | Tool invocation (tool name, arguments)       |
-| `tool_result`     | Tool return (duration, result size)           |
-| `status`          | Free-form agent status (e.g. "waiting for…") |
-| `error`           | Error with retry flag                        |
-| `agent_start`     | Agent begins execution                       |
-| `agent_done`      | Agent finishes (with reason)                 |
-| `loop_boundary`   | Loop iteration start/end marker              |
-| `cli_text_chunk`  | Streaming text from a CLI agent              |
-| `cli_tool_call`   | Tool call from a CLI agent                   |
-| `cli_thinking`    | Internal thinking from a CLI agent           |
-| `cli_progress`    | Progress status from a CLI agent             |
+| Event type | Description |
+|------------|-------------|
+| `session_start` | Session identity, team name, config hash |
+| `session_end` | Reason, duration, aggregate token usage |
+| `message` | Inter-agent message (from, to, content) |
+| `llm_call_start` | LLM call begins (model, message count) |
+| `llm_call_end` | LLM call completes (tokens, duration) |
+| `tool_call` / `tool_result` | Tool invocation and return |
+| `error` | Error with retry flag and context |
+| `agent_start` / `agent_done` | Agent lifecycle |
+| `status` | Free-form agent status |
+| `loop_boundary` | Loop iteration marker |
+| `cli_text_chunk` | Streaming text from a CLI agent |
+| `cli_tool_call` | Tool call from a CLI agent |
+| `cli_thinking` | Thinking from a CLI agent |
+| `cli_progress` | Progress status from a CLI agent |
 
-A verbose sidecar file (`*.verbose.jsonl`) stores full tool results matched by sequence number, keeping the primary log compact.
-
-## Watch
-
-`lattice watch` opens a live Textual TUI that tails the active session's JSONL file. It shows:
-
-- **Agents panel** — each agent's current state (active, standby, waiting, errored) and what it's doing right now
-- **Messages panel** — real-time inter-agent message flow with sender/receiver labels
-- **Events panel** — scrolling log of all session events (LLM calls, messages, errors)
-- **Session stats** — token usage, message count, duration, loop iteration
-
-Tool call events are hidden by default to keep the event feed readable. Use `-v` to show them on startup, or press `t` to toggle visibility live.
-
-| Key | Action              |
-|-----|---------------------|
-| `t` | Toggle tool calls   |
-| `q` | Quit                |
-
-The TUI works in two modes: standalone (`lattice watch`) which finds the latest session in `sessions/`, and combined mode (`lattice up --watch`) which embeds the TUI directly into the session runner. Both modes tail the same JSONL file and render identically.
-
-## Replay
-
-`lattice replay <session-id>` opens a post-hoc session debugger TUI. It loads a completed (or in-progress) JSONL session file and lets you step through events one at a time:
-
-| Key          | Action                                          |
-|--------------|-------------------------------------------------|
-| `j` / `Down` | Next event                                      |
-| `k` / `Up`   | Previous event                                  |
-| `g`          | Jump to a specific event by sequence number     |
-| `/`          | Search/filter events by text                    |
-| `a`          | Filter by agent name                            |
-| `t`          | Filter by event type                            |
-| `c`          | Clear all filters                               |
-| `q`          | Quit                                            |
-
-The detail view shows the full JSON payload for the selected event, and the session summary at the top displays metadata (team, duration, token totals).
-
-Session files are the only input — no API keys or running processes needed. You can replay any session from any machine as long as you have the JSONL file.
+Pass `-v` to `lattice up` to write full tool results to a verbose sidecar (`*.verbose.jsonl`), matched by sequence number.
 
 ## Development
 
