@@ -505,12 +505,17 @@ def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
             # Route heartbeat response to user as a recorded message.
             clean = heartbeat.strip_markers(content)
             if clean:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(
-                    agent._router.send(agent.name, "user", clean)
-                )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                try:
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(
+                        agent._router.send(agent.name, "user", clean)
+                    )
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
+                except RuntimeError:
+                    # No running event loop — fall back to console print.
+                    if original_callback is not None:
+                        original_callback(clean)
         elif original_callback is not None:
             original_callback(content)
 

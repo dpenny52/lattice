@@ -193,7 +193,10 @@ class LLMAgent:
                 if response.content:
                     thread.append({"role": "assistant", "content": response.content})
                     if self._on_response is not None:
-                        self._on_response(response.content)
+                        try:
+                            self._on_response(response.content)
+                        except Exception:
+                            logger.exception("%s: on_response callback failed", self.name)
                 return
 
             # Build assistant message with tool calls for the thread.
