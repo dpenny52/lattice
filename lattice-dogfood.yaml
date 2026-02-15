@@ -15,7 +15,7 @@ agents:
       Your job is to coordinate the team to implement features from the spec.
 
       The project lives in the current working directory. The spec is in obsidian
-      at ~/Documents/obsidian/general/lattice-v01-user-stories.md — reference it
+      at ~/Documents/obsidian/general/prd-agent-mood-indicator.md— reference it
       to understand what needs building.
 
       Your workflow for each story:
