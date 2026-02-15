@@ -57,6 +57,12 @@ class AnthropicProvider:
         from anthropic import AsyncAnthropic
 
         key = api_key or environ.get("ANTHROPIC_API_KEY", "")
+        if not key:
+            msg = (
+                "ANTHROPIC_API_KEY not found. Add it to .env or set it in your environment.\n"
+                "Get your API key from https://console.anthropic.com/"
+            )
+            raise ValueError(msg)
         self._client = AsyncAnthropic(api_key=key)
 
     @staticmethod
@@ -194,6 +200,12 @@ class OpenAIProvider:
         from openai import AsyncOpenAI
 
         key = api_key or environ.get("OPENAI_API_KEY", "")
+        if not key:
+            msg = (
+                "OPENAI_API_KEY not found. Add it to .env or set it in your environment.\n"
+                "Get your API key from https://platform.openai.com/api-keys"
+            )
+            raise ValueError(msg)
         self._client = AsyncOpenAI(api_key=key)
 
     async def chat(
@@ -274,8 +286,8 @@ class GoogleProvider:
 
         if self._client is None:
             msg = (
-                "Google API key not set. "
-                "Set GOOGLE_API_KEY or pass credentials."
+                "GOOGLE_API_KEY not found. Add it to .env or set it in your environment.\n"
+                "Get your API key from https://aistudio.google.com/apikey"
             )
             raise ValueError(msg)
 

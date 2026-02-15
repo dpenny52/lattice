@@ -62,6 +62,11 @@ class RateLimitGate:
         self._resume_at = max(
             self._resume_at, time.monotonic() + self._pause_seconds,
         )
+        import click
+        click.echo(
+            f"⚠️  Rate limit hit — pausing all LLM calls for {int(self._pause_seconds)}s...",
+            err=True,
+        )
         logger.warning(
             "Rate limit hit — pausing all LLM calls for %.0fs",
             self._pause_seconds,
@@ -259,6 +264,29 @@ class LLMAgent:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 retrying = attempt < _MAX_RETRIES
                 safe_error = _sanitize_error(exc)
+
+                # Generate user-friendly error message
+                import click
+                if self._is_rate_limit_error(exc):
+                    user_msg = f"Agent '{self.name}' got rate limited (429)"
+                    if retrying:
+                        user_msg += f" — retrying in {int(_RATE_LIMIT_PAUSE)}s..."
+                    click.echo(user_msg, err=True)
+                elif "connection" in safe_error.lower() or "network" in safe_error.lower():
+                    user_msg = f"Agent '{self.name}' — network error: {safe_error}"
+                    if retrying:
+                        delay = _BASE_DELAY * (2 ** (attempt - 1))
+                        user_msg += f" — retrying in {delay:.0f}s..."
+                    click.echo(user_msg, err=True)
+                elif "api key" in safe_error.lower() or "authentication" in safe_error.lower():
+                    click.echo(f"Agent '{self.name}' — authentication failed: {safe_error}", err=True)
+                else:
+                    user_msg = f"Agent '{self.name}' — LLM call failed: {safe_error}"
+                    if retrying:
+                        delay = _BASE_DELAY * (2 ** (attempt - 1))
+                        user_msg += f" — retrying in {delay:.0f}s..."
+                    click.echo(user_msg, err=True)
+
                 logger.warning(
                     "LLM call failed (attempt %d/%d): %s",
                     attempt,

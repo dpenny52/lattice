@@ -116,7 +116,13 @@ def _validate(raw: dict[str, Any]) -> LatticeConfig:
         parts: list[str] = []
         for err in errors:
             loc = " → ".join(str(s) for s in err["loc"])
-            parts.append(f"  {loc}: {err['msg']}")
+            msg = err["msg"]
+            # Make certain error messages more user-friendly
+            if "field required" in msg.lower():
+                msg = "This field is required"
+            elif "input should be" in msg.lower():
+                msg = f"Invalid value: {msg}"
+            parts.append(f"  {loc}: {msg}")
         joined = "\n".join(parts)
         msg = f"Config validation failed:\n{joined}"
         raise ConfigError(msg) from exc

@@ -65,6 +65,8 @@ class ScriptBridge:
         try:
             args = shlex.split(self._command)
         except ValueError as exc:
+            import click
+            click.echo(f"Agent '{self.name}' — invalid command: {exc}", err=True)
             self._record_error(f"Invalid command: {exc}")
             return
 
@@ -76,9 +78,17 @@ class ScriptBridge:
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError:
+            import click
+            click.echo(
+                f"Agent '{self.name}' — command not found: {args[0]}\n"
+                f"Make sure '{args[0]}' is installed and on your PATH.",
+                err=True,
+            )
             self._record_error(f"Command not found: {args[0]}")
             return
         except OSError as exc:
+            import click
+            click.echo(f"Agent '{self.name}' — failed to spawn subprocess: {exc}", err=True)
             self._record_error(f"Failed to spawn subprocess: {exc}")
             return
 
@@ -91,16 +101,32 @@ class ScriptBridge:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             await proc.wait()
+            import click
+            click.echo(
+                f"Agent '{self.name}' — script timed out after {self._timeout}s",
+                err=True,
+            )
             self._record_error(f"Script timed out after {self._timeout}s")
             return
 
         if proc.returncode != 0:
-            stderr_text = stderr_bytes.decode(errors="replace").strip()[
-                :_MAX_STDERR_CHARS
-            ]
-            self._record_error(
-                f"Script exited with code {proc.returncode}: {stderr_text}"
-            )
+            stderr_text = stderr_bytes.decode(errors="replace").strip()
+
+            # Show last 5 lines of stderr
+            stderr_lines = [line for line in stderr_text.split('\n') if line.strip()]
+            last_lines = stderr_lines[-5:] if len(stderr_lines) > 5 else stderr_lines
+            stderr_preview = "\n  ".join(last_lines)
+
+            import click
+            error_msg = f"Agent '{self.name}' (script) exited with code {proc.returncode}"
+            if stderr_preview:
+                click.echo(f"{error_msg}\nStderr (last 5 lines):\n  {stderr_preview}", err=True)
+            else:
+                click.echo(error_msg, err=True)
+
+            # Record with truncated stderr in session log
+            full_error = f"Script exited with code {proc.returncode}: {stderr_text[:_MAX_STDERR_CHARS]}"
+            self._record_error(full_error)
             return
 
         stdout_text = stdout_bytes.decode(errors="replace").strip()

@@ -109,56 +109,67 @@ async def _run_session(
     for name, agent_config in config.agents.items():
         peer_names = [n for n in agent_names if n != name] + ["user"]
 
-        if agent_config.type == "llm":
-            agent = LLMAgent(
-                name=name,
-                model_string=agent_config.model or "",
-                role=agent_config.role or "",
-                router=router,
-                recorder=recorder,
-                team_name=config.team,
-                peer_names=peer_names,
-                credentials=config.credentials,
-                configured_tools=agent_config.tools,
-                allowed_paths=config.allowed_paths or None,
-                on_response=_make_response_callback(name),
-                rate_gate=rate_gate,
-            )
-            router.register(name, agent)
-            agents[name] = agent
+        try:
+            if agent_config.type == "llm":
+                agent = LLMAgent(
+                    name=name,
+                    model_string=agent_config.model or "",
+                    role=agent_config.role or "",
+                    router=router,
+                    recorder=recorder,
+                    team_name=config.team,
+                    peer_names=peer_names,
+                    credentials=config.credentials,
+                    configured_tools=agent_config.tools,
+                    allowed_paths=config.allowed_paths or None,
+                    on_response=_make_response_callback(name),
+                    rate_gate=rate_gate,
+                )
+                router.register(name, agent)
+                agents[name] = agent
 
-        elif agent_config.type == "cli":
-            bridge = CLIBridge(
-                name=name,
-                role=agent_config.role or "",
-                router=router,
-                recorder=recorder,
-                team_name=config.team,
-                peer_names=peer_names,
-                cli_type=agent_config.cli,
-                command=agent_config.command,
-                on_response=_make_response_callback(name),
-            )
-            router.register(name, bridge)
-            cli_bridges[name] = bridge
+            elif agent_config.type == "cli":
+                bridge = CLIBridge(
+                    name=name,
+                    role=agent_config.role or "",
+                    router=router,
+                    recorder=recorder,
+                    team_name=config.team,
+                    peer_names=peer_names,
+                    cli_type=agent_config.cli,
+                    command=agent_config.command,
+                    on_response=_make_response_callback(name),
+                )
+                router.register(name, bridge)
+                cli_bridges[name] = bridge
 
-        elif agent_config.type == "script":
-            script = ScriptBridge(
-                name=name,
-                role=agent_config.role or "",
-                command=agent_config.command or "",
-                router=router,
-                recorder=recorder,
-                on_response=_make_response_callback(name),
-            )
-            router.register(name, script)
-            script_bridges[name] = script
+            elif agent_config.type == "script":
+                script = ScriptBridge(
+                    name=name,
+                    role=agent_config.role or "",
+                    command=agent_config.command or "",
+                    router=router,
+                    recorder=recorder,
+                    on_response=_make_response_callback(name),
+                )
+                router.register(name, script)
+                script_bridges[name] = script
 
-        else:
-            click.echo(
-                f"Warning: Agent '{name}' has type '{agent_config.type}' "
-                "-- not yet supported. Skipping."
-            )
+            else:
+                click.echo(
+                    f"Warning: Agent '{name}' has type '{agent_config.type}' "
+                    "-- not yet supported. Skipping."
+                )
+        except ValueError as exc:
+            # API key or provider errors
+            click.echo(f"Error initializing agent '{name}': {exc}", err=True)
+            recorder.end("error")
+            raise SystemExit(1) from exc
+        except Exception as exc:
+            # Unexpected errors
+            click.echo(f"Error initializing agent '{name}': {exc}", err=True)
+            recorder.end("error")
+            raise SystemExit(1) from exc
 
     all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge] = {
         **agents, **cli_bridges, **script_bridges,

@@ -259,21 +259,29 @@ class CLIBridge:
                 limit=_MAX_LINE_BYTES,
             )
         except FileNotFoundError:
-            error_msg = "Claude CLI not found -- is 'claude' installed and on PATH?"
-            logger.error("%s: %s", self.name, error_msg)
+            error_msg = (
+                f"Agent '{self.name}' — Claude CLI not found.\n"
+                "Make sure 'claude' is installed and on your PATH.\n"
+                "Install: npm install -g @anthropic-ai/claude-code"
+            )
+            import click
+            click.echo(error_msg, err=True)
+            logger.error("%s: Claude CLI not found", self.name)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error="Claude CLI not found", retrying=False,
                 )
             )
             self._claude_busy = False
             return
         except OSError as exc:
-            error_msg = f"Failed to spawn Claude CLI: {exc}"
-            logger.error("%s: %s", self.name, error_msg)
+            error_msg = f"Agent '{self.name}' — failed to spawn Claude CLI: {exc}"
+            import click
+            click.echo(error_msg, err=True)
+            logger.error("%s: failed to spawn Claude CLI: %s", self.name, exc)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error=f"Failed to spawn Claude CLI: {exc}", retrying=False,
                 )
             )
             self._claude_busy = False
@@ -302,12 +310,26 @@ class CLIBridge:
         if returncode != 0:
             # Read stderr for error details.
             stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-            stderr_text = stderr_bytes[:2048].decode(errors="replace").strip()[:500]
-            error_msg = f"Claude CLI exited with code {returncode}: {stderr_text}"
-            logger.error("%s: %s", self.name, error_msg)
+            stderr_text = stderr_bytes.decode(errors="replace").strip()
+
+            # Show last 5 lines of stderr for user-friendly output
+            stderr_lines = [line for line in stderr_text.split('\n') if line.strip()]
+            last_lines = stderr_lines[-5:] if len(stderr_lines) > 5 else stderr_lines
+            stderr_preview = "\n  ".join(last_lines)
+
+            error_msg = f"Agent '{self.name}' (Claude CLI) exited with code {returncode}"
+            if stderr_preview:
+                error_msg += f"\nStderr (last 5 lines):\n  {stderr_preview}"
+
+            import click
+            click.echo(error_msg, err=True)
+
+            # Record full stderr in session log
+            full_error = f"Claude CLI exited with code {returncode}: {stderr_text[:2048]}"
+            logger.error("%s: %s", self.name, full_error)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
+                    ts="", seq=0, agent=self.name, error=full_error, retrying=False,
                 )
             )
             self._claude_busy = False
@@ -606,8 +628,10 @@ class CLIBridge:
         # If we got here, the subprocess exited (or we hit an error).
         returncode = proc.returncode
         if returncode is not None and returncode != 0:
-            error_msg = f"Subprocess exited with code {returncode}"
-            logger.error("%s: %s", self.name, error_msg)
+            error_msg = f"Agent '{self.name}' (custom CLI) exited with code {returncode}"
+            import click
+            click.echo(error_msg, err=True)
+            logger.error("%s: subprocess exited with code %d", self.name, returncode)
             self._recorder.record(
                 ErrorEvent(
                     ts="", seq=0, agent=self.name, error=error_msg, retrying=False,
