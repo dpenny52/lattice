@@ -378,38 +378,6 @@ class TestHeartbeatReplIntegration:
         captured = capsys.readouterr()
         assert "Status: all agents idle" in captured.out
 
-    async def test_repl_pauses_heartbeat_during_input(
-        self, tmp_path: Path,
-    ) -> None:
-        """Heartbeat is paused during user input and resumed after."""
-        heartbeat, router, recorder, shutdown = _make_heartbeat(tmp_path)
-
-        # Track pause/resume calls
-        pause_calls: list[str] = []
-        original_pause = heartbeat.pause
-        original_resume = heartbeat.resume
-
-        def tracking_pause() -> None:
-            pause_calls.append("pause")
-            original_pause()
-
-        def tracking_resume() -> None:
-            pause_calls.append("resume")
-            original_resume()
-
-        heartbeat.pause = tracking_pause  # type: ignore[assignment]
-        heartbeat.resume = tracking_resume  # type: ignore[assignment]
-
-        agents = {"agent-a": MagicMock(spec=LLMAgent)}
-        inputs = iter(["/done"])
-        with patch("lattice.commands.up._read_input", side_effect=inputs):
-            await _repl_loop(router, "agent-a", agents, shutdown, heartbeat)
-
-        # Should have paused before input and resumed after
-        assert "pause" in pause_calls
-        assert "resume" in pause_calls
-        recorder.close()
-
     async def test_done_flag_triggers_shutdown(self, tmp_path: Path) -> None:
         """When heartbeat.done_flag is set, the REPL exits."""
         heartbeat, router, recorder, shutdown = _make_heartbeat(tmp_path)

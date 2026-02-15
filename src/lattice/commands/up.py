@@ -288,16 +288,11 @@ async def _repl_loop(
             break
 
         try:
-            if heartbeat is not None:
-                heartbeat.pause()
             line = await asyncio.get_event_loop().run_in_executor(
                 None, _read_input,
             )
         except EOFError:
             break
-        finally:
-            if heartbeat is not None:
-                heartbeat.resume()
 
         line = line.strip()
         if not line:
