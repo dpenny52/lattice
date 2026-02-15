@@ -89,8 +89,9 @@ class LLMAgent:
 
     Satisfies the ``Router.Agent`` protocol via ``handle_message``.
 
-    Each peer gets its own conversation thread -- messages from different
-    peers never pollute each other's context.
+    All messages (from any peer) share a single conversation thread.
+    Messages are prefixed with ``[from <agent>]`` so the LLM knows who
+    is talking.
     """
 
     def __init__(
@@ -119,8 +120,8 @@ class LLMAgent:
         self._on_response = on_response
         self._rate_gate = rate_gate
 
-        # Per-peer conversation threads.
-        self._threads: dict[str, list[dict[str, Any]]] = {}
+        # Single unified conversation thread.
+        self._thread: list[dict[str, Any]] = []
 
         # Provider + model.
         if provider is not None:
@@ -145,7 +146,7 @@ class LLMAgent:
         """Handle an incoming message from *from_agent*.
 
         This is the main agent loop:
-        1. Append the message to the per-peer thread.
+        1. Append the message to the unified thread (prefixed with sender).
         2. Call the LLM.
         3. Process tool calls or return on plain text.
         """
@@ -153,10 +154,12 @@ class LLMAgent:
             AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="llm")
         )
 
-        thread = self._get_thread(from_agent)
-        thread.append({"role": "user", "content": content})
+        self._thread.append({
+            "role": "user",
+            "content": f"[from {from_agent}]: {content}",
+        })
 
-        await self._run_loop(thread)
+        await self._run_loop(self._thread)
 
         self._recorder.record(
             AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
@@ -166,8 +169,8 @@ class LLMAgent:
         """No-op shutdown for protocol consistency."""
 
     def reset_context(self) -> None:
-        """Clear all conversation threads for all peers."""
-        self._threads.clear()
+        """Clear the conversation thread."""
+        self._thread.clear()
 
     # ------------------------------------------------------------------ #
     # Internal loop
@@ -268,23 +271,36 @@ class LLMAgent:
                 # Generate user-friendly error message
                 import click
                 if self._is_rate_limit_error(exc):
-                    user_msg = f"Agent '{self.name}' got rate limited (429)"
+                    # Extract provider name from model string
+                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
                     if retrying:
-                        user_msg += f" — retrying in {int(_RATE_LIMIT_PAUSE)}s..."
+                        user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited). Retrying in {int(_RATE_LIMIT_PAUSE)}s..."
+                    else:
+                        user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited)."
                     click.echo(user_msg, err=True)
-                elif "connection" in safe_error.lower() or "network" in safe_error.lower():
-                    user_msg = f"Agent '{self.name}' — network error: {safe_error}"
+                elif "401" in safe_error or "unauthorized" in safe_error.lower() or "api key" in safe_error.lower() or "authentication" in safe_error.lower():
+                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
+                    click.echo(f"Agent '{self.name}' got a 401 from {provider} (authentication failed). Check your API key.", err=True)
+                elif "500" in safe_error or "internal server" in safe_error.lower() or "service unavailable" in safe_error.lower():
+                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
                     if retrying:
                         delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg += f" — retrying in {delay:.0f}s..."
+                        user_msg = f"Agent '{self.name}' got a 500 from {provider} (server error). Retrying in {delay:.0f}s..."
+                    else:
+                        user_msg = f"Agent '{self.name}' got a 500 from {provider} (server error)."
                     click.echo(user_msg, err=True)
-                elif "api key" in safe_error.lower() or "authentication" in safe_error.lower():
-                    click.echo(f"Agent '{self.name}' — authentication failed: {safe_error}", err=True)
+                elif "connection" in safe_error.lower() or "network" in safe_error.lower() or "timeout" in safe_error.lower() or "dns" in safe_error.lower():
+                    if retrying:
+                        delay = _BASE_DELAY * (2 ** (attempt - 1))
+                        user_msg = f"Agent '{self.name}' — network error: {safe_error}. Retrying in {delay:.0f}s..."
+                    else:
+                        user_msg = f"Agent '{self.name}' — network error: {safe_error}"
+                    click.echo(user_msg, err=True)
                 else:
                     user_msg = f"Agent '{self.name}' — LLM call failed: {safe_error}"
                     if retrying:
                         delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg += f" — retrying in {delay:.0f}s..."
+                        user_msg += f". Retrying in {delay:.0f}s..."
                     click.echo(user_msg, err=True)
 
                 logger.warning(
@@ -358,14 +374,8 @@ class LLMAgent:
                 f'\nYou are part of a team called "{self._team_name}".\n'
                 f"You can communicate with: {peer_list}\n"
                 "Use the send_message tool to talk to them.\n"
-                "By default, send_message waits for the target agent's reply "
-                "and returns it directly. Set wait_for_reply=false to send "
-                "without waiting."
+                "Messages from different agents arrive in the same conversation "
+                "prefixed with [from agent_name]."
             )
         return "\n".join(parts)
 
-    def _get_thread(self, peer: str) -> list[dict[str, Any]]:
-        """Return or create the conversation thread for *peer*."""
-        if peer not in self._threads:
-            self._threads[peer] = []
-        return self._threads[peer]

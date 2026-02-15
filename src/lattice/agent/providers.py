@@ -58,10 +58,7 @@ class AnthropicProvider:
 
         key = api_key or environ.get("ANTHROPIC_API_KEY", "")
         if not key:
-            msg = (
-                "ANTHROPIC_API_KEY not found. Add it to .env or set it in your environment.\n"
-                "Get your API key from https://console.anthropic.com/"
-            )
+            msg = "ANTHROPIC_API_KEY not found. Add it to .env or set it in your environment."
             raise ValueError(msg)
         self._client = AsyncAnthropic(api_key=key)
 
@@ -201,10 +198,7 @@ class OpenAIProvider:
 
         key = api_key or environ.get("OPENAI_API_KEY", "")
         if not key:
-            msg = (
-                "OPENAI_API_KEY not found. Add it to .env or set it in your environment.\n"
-                "Get your API key from https://platform.openai.com/api-keys"
-            )
+            msg = "OPENAI_API_KEY not found. Add it to .env or set it in your environment."
             raise ValueError(msg)
         self._client = AsyncOpenAI(api_key=key)
 
@@ -285,10 +279,7 @@ class GoogleProvider:
         from google.genai import types
 
         if self._client is None:
-            msg = (
-                "GOOGLE_API_KEY not found. Add it to .env or set it in your environment.\n"
-                "Get your API key from https://aistudio.google.com/apikey"
-            )
+            msg = "GOOGLE_API_KEY not found. Add it to .env or set it in your environment."
             raise ValueError(msg)
 
         # Build system instruction and contents.

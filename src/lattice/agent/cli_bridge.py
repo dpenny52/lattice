@@ -317,9 +317,9 @@ class CLIBridge:
             last_lines = stderr_lines[-5:] if len(stderr_lines) > 5 else stderr_lines
             stderr_preview = "\n  ".join(last_lines)
 
-            error_msg = f"Agent '{self.name}' (Claude CLI) exited with code {returncode}"
+            error_msg = f"Agent '{self.name}' exited with code {returncode}."
             if stderr_preview:
-                error_msg += f"\nStderr (last 5 lines):\n  {stderr_preview}"
+                error_msg += f" Stderr:\n  {stderr_preview}"
 
             import click
             click.echo(error_msg, err=True)
@@ -628,7 +628,7 @@ class CLIBridge:
         # If we got here, the subprocess exited (or we hit an error).
         returncode = proc.returncode
         if returncode is not None and returncode != 0:
-            error_msg = f"Agent '{self.name}' (custom CLI) exited with code {returncode}"
+            error_msg = f"Agent '{self.name}' exited with code {returncode}."
             import click
             click.echo(error_msg, err=True)
             logger.error("%s: subprocess exited with code %d", self.name, returncode)

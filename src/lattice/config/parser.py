@@ -48,10 +48,7 @@ def _resolve_path(path: Path | None) -> Path:
 
     default = Path.cwd() / DEFAULT_CONFIG_NAME
     if not default.is_file():
-        msg = (
-            f"No {DEFAULT_CONFIG_NAME} found in {Path.cwd()}. "
-            "Run `lattice init` to create one."
-        )
+        msg = "No lattice.yaml found. Run `lattice init` to create one."
         raise ConfigError(msg)
     return default
 

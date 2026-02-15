@@ -118,9 +118,9 @@ class ScriptBridge:
             stderr_preview = "\n  ".join(last_lines)
 
             import click
-            error_msg = f"Agent '{self.name}' (script) exited with code {proc.returncode}"
+            error_msg = f"Agent '{self.name}' exited with code {proc.returncode}."
             if stderr_preview:
-                click.echo(f"{error_msg}\nStderr (last 5 lines):\n  {stderr_preview}", err=True)
+                click.echo(f"{error_msg} Stderr:\n  {stderr_preview}", err=True)
             else:
                 click.echo(error_msg, err=True)
 

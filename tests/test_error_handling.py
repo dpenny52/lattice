@@ -62,7 +62,7 @@ class TestConfigErrorMessages:
     def test_missing_config_file(self, tmp_path: Path) -> None:
         """Missing lattice.yaml should suggest running lattice init."""
         os.chdir(tmp_path)
-        with pytest.raises(ConfigError, match="Run `lattice init` to create one"):
+        with pytest.raises(ConfigError, match="No lattice.yaml found. Run `lattice init` to create one."):
             load_config(None)
 
     def test_invalid_yaml_syntax(self, tmp_path: Path) -> None:
@@ -121,13 +121,16 @@ class TestSubprocessErrorReporting:
         with patch("click.echo") as mock_echo:
             await bridge.handle_message("user", "test")
 
-        # Verify error message was shown
+        # Verify error message was shown with exact format
         error_calls = [
             call for call in mock_echo.call_args_list
             if len(call[0]) > 0 and "exited with code" in str(call[0][0])
         ]
         assert len(error_calls) > 0
-        assert "Error line 1" in str(error_calls[0])
+        error_msg = str(error_calls[0][0][0])
+        assert "exited with code 1." in error_msg
+        assert "Stderr:" in error_msg
+        assert "Error line 1" in error_msg
 
     async def test_cli_bridge_shows_claude_not_found(self, tmp_path: Path) -> None:
         """CLI bridge should show helpful message when Claude CLI is missing."""
@@ -202,9 +205,85 @@ class TestRateLimitErrors:
         with patch("click.echo") as mock_echo:
             await agent.handle_message("user", "test message")
 
-        # Verify rate limit message was shown
+        # Verify rate limit message was shown with exact format
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
-        assert any("rate limit" in str(call).lower() for call in error_calls)
+        assert any("got a 429 from anthropic (rate limited)" in str(call).lower() for call in error_calls)
+
+    async def test_auth_error_shows_user_message(self, tmp_path: Path) -> None:
+        """401 auth errors should show user-friendly message."""
+        from lattice.agent.llm_agent import LLMAgent
+        from lattice.agent.providers import LLMProvider
+        from lattice.router.router import Router
+        from lattice.session.recorder import SessionRecorder
+
+        recorder = SessionRecorder(team="test", config_hash="abc123")
+        router = Router(
+            topology=TopologyConfig(type="mesh"),
+            recorder=recorder,
+        )
+        router.register("user", MagicMock())
+
+        # Create mock provider that raises a 401 error
+        mock_provider = MagicMock(spec=LLMProvider)
+        mock_provider.chat = AsyncMock(
+            side_effect=Exception("401 Unauthorized")
+        )
+
+        agent = LLMAgent(
+            name="test_agent",
+            model_string="openai/gpt-4",
+            role="test",
+            router=router,
+            recorder=recorder,
+            team_name="test",
+            peer_names=["user"],
+            provider=mock_provider,
+        )
+
+        with patch("click.echo") as mock_echo:
+            await agent.handle_message("user", "test message")
+
+        # Verify auth error message was shown
+        error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
+        assert any("got a 401 from openai (authentication failed)" in str(call).lower() for call in error_calls)
+
+    async def test_server_error_shows_user_message(self, tmp_path: Path) -> None:
+        """500 server errors should show user-friendly message with retry info."""
+        from lattice.agent.llm_agent import LLMAgent
+        from lattice.agent.providers import LLMProvider
+        from lattice.router.router import Router
+        from lattice.session.recorder import SessionRecorder
+
+        recorder = SessionRecorder(team="test", config_hash="abc123")
+        router = Router(
+            topology=TopologyConfig(type="mesh"),
+            recorder=recorder,
+        )
+        router.register("user", MagicMock())
+
+        # Create mock provider that raises a 500 error
+        mock_provider = MagicMock(spec=LLMProvider)
+        mock_provider.chat = AsyncMock(
+            side_effect=Exception("500 Internal Server Error")
+        )
+
+        agent = LLMAgent(
+            name="test_agent",
+            model_string="google/gemini-2.0-flash",
+            role="test",
+            router=router,
+            recorder=recorder,
+            team_name="test",
+            peer_names=["user"],
+            provider=mock_provider,
+        )
+
+        with patch("click.echo") as mock_echo:
+            await agent.handle_message("user", "test message")
+
+        # Verify server error message was shown
+        error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
+        assert any("got a 500 from google (server error)" in str(call).lower() for call in error_calls)
 
 
 class TestNetworkErrors:
