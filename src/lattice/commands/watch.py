@@ -277,6 +277,7 @@ class WatchApp(App[None]):
 
     .event-line {
         margin: 0 0 1 0;
+        width: 1fr;
     }
     """
 
