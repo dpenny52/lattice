@@ -957,18 +957,17 @@ class TestMessageQueuing:
                 bridge.handle_message("user", "first task")
             )
 
-            # Wait for the first task to actually start processing.
-            await first_task_started.wait()
-            # Let the event loop run so handle_message enters the streaming loop.
-            await asyncio.sleep(0.01)
+            # Wait for the first subprocess to spawn.  By the time this event
+            # fires, _claude_busy is already True and task_1 is blocked on
+            # stdout readline — no sleep needed.
+            await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
 
-            # Now send second message while first is still running (blocked on stdout).
+            # Second message should queue (agent is busy) and return immediately.
             task_2 = asyncio.create_task(
                 bridge.handle_message("user", "second task")
             )
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(task_2, timeout=2.0)
 
-            # Second message should have queued immediately.
             assert "[cli-agent is busy, message queued]" in captured
 
             # Now let first task complete by feeding data and closing stdout.
@@ -985,9 +984,8 @@ class TestMessageQueuing:
             stdout_1.close()
             stdout_2.close()
 
-            # task_1 processes the queue inline, so both tasks complete together.
+            # task_1 processes the queue inline before returning.
             await asyncio.wait_for(task_1, timeout=2.0)
-            await asyncio.wait_for(task_2, timeout=2.0)
 
         assert "first response" in captured
         assert "second response" in captured
@@ -1062,12 +1060,11 @@ class TestMessageQueuing:
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
             # First message.
             task_1 = asyncio.create_task(bridge.handle_message("user", "first"))
-            await first_task_started.wait()
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
 
-            # Second message (queues).
+            # Second message (queues — agent is busy).
             task_2 = asyncio.create_task(bridge.handle_message("user", "second"))
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(task_2, timeout=2.0)
 
             # Let first task complete with session_id (from system init).
             # Pre-close stdout_2 since _process_message_queue runs inline.
@@ -1082,7 +1079,6 @@ class TestMessageQueuing:
             stdout_2.close()
 
             await asyncio.wait_for(task_1, timeout=2.0)
-            await asyncio.wait_for(task_2, timeout=2.0)
 
         # Verify first call doesn't use --continue.
         first_call_args = recorded_args[0]
@@ -1154,10 +1150,10 @@ class TestMessageQueuing:
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
             task_1 = asyncio.create_task(bridge.handle_message("user", "t1"))
-            await first_task_started.wait()
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
+
             task_2 = asyncio.create_task(bridge.handle_message("user", "t2"))
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(task_2, timeout=2.0)
 
             # Verify busy feedback before first task completes.
             assert "[cli-agent is busy, message queued]" in captured
@@ -1171,7 +1167,6 @@ class TestMessageQueuing:
             stdout_2.close()
 
             await asyncio.wait_for(task_1, timeout=2.0)
-            await asyncio.wait_for(task_2, timeout=2.0)
 
         recorder.close()
 
