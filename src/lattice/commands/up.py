@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import faulthandler
+import functools
 import hashlib
+import os
+import select
 import signal
+import sys
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -229,7 +236,13 @@ async def _run_session(
         loop = asyncio.get_event_loop()
 
         def _signal_shutdown(sig_name: str) -> None:
-            click.echo(f"\nReceived {sig_name}, shutting down...", err=True)
+            click.echo(
+                f"\nReceived {sig_name} "
+                f"(pid={os.getpid()} ppid={os.getppid()} "
+                f"pgid={os.getpgrp()} sid={os.getsid(0)})",
+                err=True,
+            )
+            faulthandler.dump_traceback(file=sys.stderr)
             shutdown_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -346,51 +359,66 @@ async def _repl_loop(
 
     reason = "user_shutdown"
 
-    while not shutdown_event.is_set():
-        # Check if heartbeat signalled completion
-        if heartbeat is not None and heartbeat.done_flag:
-            reason = "complete"
-            shutdown_event.set()
-            break
+    # Bridge async shutdown_event → thread-safe cancel event so _read_input
+    # (running in a thread) can be interrupted when SIGTERM arrives.
+    thread_cancel = threading.Event()
 
-        try:
-            line = await asyncio.get_event_loop().run_in_executor(
-                None, _read_input,
-            )
-        except EOFError:
-            break
+    async def _bridge_shutdown() -> None:
+        await shutdown_event.wait()
+        thread_cancel.set()
 
-        line = line.strip()
-        if not line:
-            continue
+    bridge_task = asyncio.create_task(_bridge_shutdown())
 
-        # -- Slash commands ------------------------------------------------
-        if line.startswith("/"):
-            should_break = await _handle_command(
-                line, agents, heartbeat,
-            )
-            if should_break:
+    try:
+        while not shutdown_event.is_set():
+            # Check if heartbeat signalled completion
+            if heartbeat is not None and heartbeat.done_flag:
+                reason = "complete"
+                shutdown_event.set()
                 break
-            continue
 
-        # -- @agent routing ------------------------------------------------
-        if line.startswith("@"):
-            parts = line.split(None, 1)
-            target = parts[0][1:]  # strip the @
-            content = parts[1] if len(parts) > 1 else ""
+            try:
+                line = await asyncio.get_event_loop().run_in_executor(
+                    None, functools.partial(_read_input, thread_cancel),
+                )
+            except EOFError:
+                break
 
-            if target not in agents:
-                click.echo(f"Unknown agent: {target}")
-                continue
-            if not content:
-                click.echo(f"No message provided for @{target}")
+            line = line.strip()
+            if not line:
                 continue
 
-            await router.send("user", target, content)
-            continue
+            # -- Slash commands --------------------------------------------
+            if line.startswith("/"):
+                should_break = await _handle_command(
+                    line, agents, heartbeat,
+                )
+                if should_break:
+                    break
+                continue
 
-        # -- Plain text -> entry agent --------------------------------------
-        await router.send("user", entry_agent, line)
+            # -- @agent routing --------------------------------------------
+            if line.startswith("@"):
+                parts = line.split(None, 1)
+                target = parts[0][1:]  # strip the @
+                content = parts[1] if len(parts) > 1 else ""
+
+                if target not in agents:
+                    click.echo(f"Unknown agent: {target}")
+                    continue
+                if not content:
+                    click.echo(f"No message provided for @{target}")
+                    continue
+
+                await router.send("user", target, content)
+                continue
+
+            # -- Plain text -> entry agent ---------------------------------
+            await router.send("user", entry_agent, line)
+    finally:
+        bridge_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await bridge_task
 
     # If we got here because shutdown_event was set externally (Ctrl+C / SIGTERM)
     # rather than via /done or heartbeat completion, mark as ctrl_c.
@@ -475,26 +503,45 @@ async def _run_tui_app(app: "WatchApp") -> None:  # type: ignore[name-defined]
     await app.run_async()
 
 
-def _read_input() -> str:
-    r"""Blocking input() wrapper for use with ``run_in_executor``.
+def _read_input(cancel: threading.Event | None = None) -> str:
+    r"""Blocking stdin reader for use with ``run_in_executor``.
+
+    Uses ``select.select`` with a 0.5 s timeout so the thread can check
+    the *cancel* event between polls.  When *cancel* is set (bridged from
+    the async ``shutdown_event``), an ``EOFError`` is raised so the REPL
+    loop can exit cleanly instead of blocking forever on a dead stdin pipe.
 
     Supports multi-line input via backslash continuation:
-    - Lines ending with `\` continue to the next line
-    - Final line without `\` sends the complete message
+    - Lines ending with ``\\`` continue to the next line
+    - Final line without ``\\`` sends the complete message
     """
     lines: list[str] = []
     prompt = "> "
 
     while True:
-        line = input(prompt)
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
 
-        # Check for continuation (backslash at end)
+        # Poll stdin with timeout so we can check the cancel event
+        while cancel is None or not cancel.is_set():
+            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            if ready:
+                break
+            if cancel is None:
+                break  # No cancel event, fall through to blocking read
+
+        if cancel is not None and cancel.is_set():
+            raise EOFError
+
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError
+        line = line.rstrip("\n")
+
         if line.endswith("\\"):
-            # Remove the backslash and continue
             lines.append(line[:-1])
             prompt = "... "
         else:
-            # Final line, combine and return
             lines.append(line)
             return "\n".join(lines)
 

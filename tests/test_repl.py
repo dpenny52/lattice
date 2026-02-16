@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ from lattice.commands.up import (
     UserAgent,
     _handle_command,
     _make_response_callback,
+    _read_input,
     _repl_loop,
     _run_session,
 )
@@ -521,6 +523,13 @@ class TestEdgeCases:
 
 
 class TestMultiLineInput:
+    """Multi-line continuation tests.
+
+    ``_read_input`` now uses ``select.select`` + ``sys.stdin.readline``
+    instead of ``input()``.  We patch ``select.select`` to always report
+    stdin as ready and feed lines through a mock ``sys.stdin.readline``.
+    """
+
     async def test_multiline_with_continuation(self, tmp_path: Path) -> None:
         """Backslash at end of line continues to next line."""
         router, recorder = _make_router(tmp_path)
@@ -531,10 +540,15 @@ class TestMultiLineInput:
         agents = {"entry": MagicMock(spec=LLMAgent)}
         shutdown = asyncio.Event()
 
-        # User types: "line 1\" → "line 2\" → "line 3" → "/done"
-        # This should produce a single message "line 1\nline 2\nline 3"
-        inputs = iter(["line 1\\", "line 2\\", "line 3", "/done"])
-        with patch("builtins.input", side_effect=inputs):
+        mock_stdin = MagicMock()
+        mock_stdin.readline.side_effect = [
+            "line 1\\\n", "line 2\\\n", "line 3\n",  # → joined message
+            "/done\n",
+        ]
+        with (
+            patch("select.select", return_value=([mock_stdin], [], [])),
+            patch("sys.stdin", mock_stdin),
+        ):
             await _repl_loop(router, "entry", agents, shutdown)
 
         await asyncio.sleep(0.05)
@@ -553,9 +567,15 @@ class TestMultiLineInput:
         agents = {"writer": MagicMock(spec=LLMAgent)}
         shutdown = asyncio.Event()
 
-        # "@writer Please write a\", "multi-line\", "message"
-        inputs = iter(["@writer Please write a\\", "multi-line\\", "message", "/done"])
-        with patch("builtins.input", side_effect=inputs):
+        mock_stdin = MagicMock()
+        mock_stdin.readline.side_effect = [
+            "@writer Please write a\\\n", "multi-line\\\n", "message\n",
+            "/done\n",
+        ]
+        with (
+            patch("select.select", return_value=([mock_stdin], [], [])),
+            patch("sys.stdin", mock_stdin),
+        ):
             await _repl_loop(router, "entry", agents, shutdown)
 
         await asyncio.sleep(0.05)
@@ -574,8 +594,12 @@ class TestMultiLineInput:
         agents = {"entry": MagicMock(spec=LLMAgent)}
         shutdown = asyncio.Event()
 
-        inputs = iter(["just one line", "/done"])
-        with patch("builtins.input", side_effect=inputs):
+        mock_stdin = MagicMock()
+        mock_stdin.readline.side_effect = ["just one line\n", "/done\n"]
+        with (
+            patch("select.select", return_value=([mock_stdin], [], [])),
+            patch("sys.stdin", mock_stdin),
+        ):
             await _repl_loop(router, "entry", agents, shutdown)
 
         await asyncio.sleep(0.05)
@@ -594,11 +618,65 @@ class TestMultiLineInput:
         agents = {"entry": MagicMock(spec=LLMAgent)}
         shutdown = asyncio.Event()
 
-        # "first\", "", "last" should produce "first\n\nlast"
-        inputs = iter(["first\\", "\\", "last", "/done"])
-        with patch("builtins.input", side_effect=inputs):
+        mock_stdin = MagicMock()
+        mock_stdin.readline.side_effect = [
+            "first\\\n", "\\\n", "last\n",  # → "first\n\nlast"
+            "/done\n",
+        ]
+        with (
+            patch("select.select", return_value=([mock_stdin], [], [])),
+            patch("sys.stdin", mock_stdin),
+        ):
             await _repl_loop(router, "entry", agents, shutdown)
 
         await asyncio.sleep(0.05)
         entry_mock.handle_message.assert_called_once_with("user", "first\n\nlast")
+        recorder.close()
+
+
+# ================================================================== #
+# _read_input cancellation
+# ================================================================== #
+
+
+class TestReadInputCancel:
+    """Tests for the cancel-event integration in ``_read_input``."""
+
+    def test_cancel_already_set_raises_eof(self) -> None:
+        """Pre-set cancel event causes immediate EOFError."""
+        cancel = threading.Event()
+        cancel.set()
+
+        import pytest
+        with pytest.raises(EOFError):
+            _read_input(cancel)
+
+    async def test_repl_exits_on_shutdown_during_read(
+        self, tmp_path: Path,
+    ) -> None:
+        """Setting shutdown_event mid-read causes the REPL to exit cleanly."""
+        router, recorder = _make_router(tmp_path)
+        router.register("entry", MagicMock())
+
+        agents = {"entry": MagicMock(spec=LLMAgent)}
+        shutdown = asyncio.Event()
+
+        # Schedule shutdown after a short delay so the bridge has time to
+        # propagate to thread_cancel.
+        async def _set_shutdown() -> None:
+            await asyncio.sleep(0.1)
+            shutdown.set()
+
+        asyncio.create_task(_set_shutdown())
+
+        # select returns nothing-ready so _read_input polls the cancel event.
+        mock_stdin = MagicMock()
+        mock_stdin.readline.side_effect = AssertionError("should not be called")
+        with (
+            patch("select.select", return_value=([], [], [])),
+            patch("sys.stdin", mock_stdin),
+        ):
+            reason = await _repl_loop(router, "entry", agents, shutdown)
+
+        assert reason == "ctrl_c"
         recorder.close()
