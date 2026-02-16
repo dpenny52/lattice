@@ -99,9 +99,11 @@ def _get_total_system_mb() -> float:
 def _get_available_mb_macos() -> float | None:
     """Get available memory via Mach host_statistics64 (no subprocess).
 
-    Uses a conservative estimate: free + purgeable pages only.
-    Inactive pages are excluded because they may be compressed or
-    swapped and not cheaply reclaimable under memory pressure.
+    Counts free + inactive + purgeable pages.  Inactive pages are the
+    first macOS reclaims under pressure and are cheaply reclaimable
+    (unlike compressed pages which live in the compressor).  This
+    matches how Activity Monitor and ``memory_pressure`` report
+    available memory.
     """
     if _libc is None:
         return None
@@ -118,10 +120,9 @@ def _get_available_mb_macos() -> float | None:
             return None
 
         page_size = os.sysconf("SC_PAGE_SIZE")
-        # Conservative: only count truly free + purgeable pages.
-        # Inactive pages look "available" but may be compressed/swapped
-        # and reclaiming them under pressure triggers the OOM killer.
-        available_pages = stats.free_count + stats.purgeable_count
+        available_pages = (
+            stats.free_count + stats.inactive_count + stats.purgeable_count
+        )
         return (available_pages * page_size) / (1024 * 1024)
     except Exception:
         return None
