@@ -21,8 +21,10 @@ from lattice.session.recorder import SessionRecorder
 
 def _async_capture(captured: list[str]) -> Any:
     """Return an async callback that appends to *captured*."""
+
     async def _cb(content: str) -> None:
         captured.append(content)
+
     return _cb
 
 
@@ -127,7 +129,8 @@ class TestBasicExecution:
         mock_proc = _make_mock_process(stdout=b"processed output\n")
 
         with patch(
-            "asyncio.create_subprocess_exec", return_value=mock_proc,
+            "asyncio.create_subprocess_exec",
+            return_value=mock_proc,
         ):
             await bridge.handle_message("user", "input data")
 
@@ -153,7 +156,8 @@ class TestBasicExecution:
         # The router.send should be called with stripped text.
         await asyncio.sleep(0.05)
         mock_sender.handle_message.assert_called_once_with(
-            "script-agent", "result",
+            "script-agent",
+            "result",
         )
         recorder.close()
 
@@ -184,7 +188,8 @@ class TestResultRouting:
 
         await asyncio.sleep(0.05)
         mock_sender.handle_message.assert_called_once_with(
-            "script-agent", "hello back",
+            "script-agent",
+            "hello back",
         )
         recorder.close()
 
@@ -206,7 +211,8 @@ class TestOnResponseCallback:
         router.register("user", mock_sender)
 
         bridge = _make_script_bridge(
-            router, recorder,
+            router,
+            recorder,
             on_response=_async_capture(captured),
         )
         router.register("script-agent", bridge)
@@ -224,7 +230,8 @@ class TestOnResponseCallback:
         captured: list[str] = []
 
         bridge = _make_script_bridge(
-            router, recorder,
+            router,
+            recorder,
             on_response=_async_capture(captured),
         )
 
@@ -241,7 +248,8 @@ class TestOnResponseCallback:
         captured: list[str] = []
 
         bridge = _make_script_bridge(
-            router, recorder,
+            router,
+            recorder,
             on_response=_async_capture(captured),
         )
 
@@ -269,7 +277,8 @@ class TestNonZeroExit:
         bridge = _make_script_bridge(router, recorder)
 
         mock_proc = _make_mock_process(
-            returncode=1, stderr=b"something went wrong",
+            returncode=1,
+            stderr=b"something went wrong",
         )
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
@@ -359,14 +368,16 @@ class TestEmptyStdout:
         from lattice.session.models import MessageEvent
 
         msg_events = [
-            e for e in events
+            e
+            for e in events
             if isinstance(e, MessageEvent) and e.from_agent == "script-agent"
         ]
         assert msg_events == []
         recorder.close()
 
     async def test_whitespace_only_stdout_treated_as_empty(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         router, recorder = _make_router(tmp_path)
 
@@ -503,7 +514,8 @@ class TestStatelessExecution:
     """Each message spawns a fresh subprocess."""
 
     async def test_multiple_messages_spawn_separate_processes(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         router, recorder = _make_router(tmp_path)
 
@@ -639,7 +651,8 @@ class TestIntegrationWithUp:
         assert call_kwargs[1]["command"] == "python format.py"
 
     async def test_agents_command_shows_script_type(
-        self, capsys: Any,
+        self,
+        capsys: Any,
     ) -> None:
         """The /agents command shows (script) for script agents."""
         from lattice.commands.up import _handle_command
@@ -659,7 +672,9 @@ class TestIntegrationWithUp:
         assert "formatter (script)" in captured.out
 
     async def test_mixed_agents_counted_correctly(
-        self, tmp_path: Path, capsys: Any,
+        self,
+        tmp_path: Path,
+        capsys: Any,
     ) -> None:
         """Startup banner counts LLM, CLI, and script agents."""
         from lattice.commands.up import _run_session

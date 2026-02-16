@@ -21,10 +21,7 @@ def down() -> None:
     data = read_pidfile()
 
     if data is None:
-        click.echo(
-            "No running session found "
-            "(no pidfile at .lattice/session.pid)"
-        )
+        click.echo("No running session found (no pidfile at .lattice/session.pid)")
         raise SystemExit(1)
 
     pid = data.get("pid")
@@ -44,10 +41,7 @@ def down() -> None:
         remove_pidfile()
         raise SystemExit(0)
 
-    click.echo(
-        f"Shutting down session {session_id} "
-        f"({team}, PID {pid})..."
-    )
+    click.echo(f"Shutting down session {session_id} ({team}, PID {pid})...")
 
     try:
         os.kill(pid, signal.SIGTERM)

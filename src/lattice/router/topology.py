@@ -47,9 +47,9 @@ class HubTopology:
         self._workers = set(workers)
 
     def is_allowed(self, from_agent: str, to_agent: str) -> bool:
-        return (
-            from_agent == self._coordinator and to_agent in self._workers
-        ) or (from_agent in self._workers and to_agent == self._coordinator)
+        return (from_agent == self._coordinator and to_agent in self._workers) or (
+            from_agent in self._workers and to_agent == self._coordinator
+        )
 
 
 class CustomTopology:

@@ -94,8 +94,7 @@ class ScriptBridge:
             return
         except OSError as exc:
             click.echo(
-                f"Agent '{self.name}' — failed to spawn"
-                f" subprocess: {exc}",
+                f"Agent '{self.name}' — failed to spawn subprocess: {exc}",
                 err=True,
             )
             self._record_error(f"Failed to spawn subprocess: {exc}")
@@ -149,10 +148,7 @@ class ScriptBridge:
 
             # Record with truncated stderr in session log
             stderr_snippet = stderr_text[:_MAX_STDERR_CHARS]
-            full_error = (
-                f"Script exited with code {proc.returncode}:"
-                f" {stderr_snippet}"
-            )
+            full_error = f"Script exited with code {proc.returncode}: {stderr_snippet}"
             self._record_error(full_error)
             return
 

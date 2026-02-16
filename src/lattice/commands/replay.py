@@ -157,9 +157,8 @@ def _extract_metadata(file_path: Path, events: list[SessionEvent]) -> SessionMet
     # Prefer session_end tokens if present and non-zero, otherwise use accumulated
     total_tokens = accumulated_tokens
     if session_end_tokens is not None:
-        end_total = (
-            session_end_tokens.get("input", 0)
-            + session_end_tokens.get("output", 0)
+        end_total = session_end_tokens.get("input", 0) + session_end_tokens.get(
+            "output", 0
         )
         if end_total > 0:
             total_tokens = session_end_tokens
@@ -223,10 +222,7 @@ def _format_session_list(sessions: list[SessionMetadata]) -> None:
     # Table rows
     for session in sessions:
         start_str = session.start_ts.strftime("%Y-%m-%d %H:%M:%S")
-        total = (
-            session.total_tokens['input']
-            + session.total_tokens['output']
-        )
+        total = session.total_tokens["input"] + session.total_tokens["output"]
         tokens_str = f"{total:,}"
         status_marker = "✓" if session.is_complete else "⋯"
 
@@ -257,8 +253,8 @@ def _format_session_detail(data: SessionData) -> None:
     click.echo("\n📊 Statistics:")
     click.echo(f"   Events: {meta.event_count:,}")
     click.echo(f"   Messages: {meta.message_count:,}")
-    tok_in = meta.total_tokens['input']
-    tok_out = meta.total_tokens['output']
+    tok_in = meta.total_tokens["input"]
+    tok_out = meta.total_tokens["output"]
     click.echo(f"   Tokens: {tok_in:,} in / {tok_out:,} out")
     click.echo(f"\n👥 Agents ({len(meta.agents)}):")
     for agent in sorted(meta.agents):
@@ -297,8 +293,8 @@ class SessionMetadataPanel(Static):
             f" | [bold]Duration:[/bold] {meta.duration_str}"
         )
         yield Label(team_dur, markup=True)
-        tok_in = meta.total_tokens['input']
-        tok_out = meta.total_tokens['output']
+        tok_in = meta.total_tokens["input"]
+        tok_out = meta.total_tokens["output"]
         stats = (
             f"[bold]Events:[/bold] {meta.event_count:,}"
             f" | [bold]Messages:[/bold] {meta.message_count:,}"
@@ -354,8 +350,7 @@ class EventDetailPanel(VerticalScroll):
 
         elif isinstance(event, MessageEvent):
             from_to = (
-                f"[bold]From:[/bold] {event.from_agent}"
-                f" → [bold]To:[/bold] {event.to}"
+                f"[bold]From:[/bold] {event.from_agent} → [bold]To:[/bold] {event.to}"
             )
             yield Label(from_to, markup=True)
             yield Label("[bold]Content:[/bold]", markup=True)
@@ -367,8 +362,7 @@ class EventDetailPanel(VerticalScroll):
             yield Label(f"[bold]Agent:[/bold] {event.agent}", markup=True)
             yield Label(f"[bold]Model:[/bold] {event.model}", markup=True)
             yield Label(
-                f"[bold]Messages Count:[/bold] "
-                f"{event.messages_count}",
+                f"[bold]Messages Count:[/bold] {event.messages_count}",
                 markup=True,
             )
 
@@ -396,8 +390,7 @@ class EventDetailPanel(VerticalScroll):
             yield Label(f"[bold]Tool:[/bold] {event.tool}", markup=True)
             yield Label(f"[bold]Duration:[/bold] {event.duration_ms:,}ms", markup=True)
             yield Label(
-                f"[bold]Result Size:[/bold] "
-                f"{event.result_size:,} bytes",
+                f"[bold]Result Size:[/bold] {event.result_size:,} bytes",
                 markup=True,
             )
 
@@ -706,16 +699,24 @@ class ReplayApp(App[None]):
                 searchable_text = f"{event.from_agent} {event.to} {event.content}"
             elif isinstance(event, (ToolCallEvent, CLIToolCallEvent)):
                 searchable_text = f"{event.agent} {event.tool} {json.dumps(event.args)}"
-            elif isinstance(event, (
-                ToolResultEvent, StatusEvent, ErrorEvent,
-                AgentStartEvent, AgentDoneEvent,
-            )):
+            elif isinstance(
+                event,
+                (
+                    ToolResultEvent,
+                    StatusEvent,
+                    ErrorEvent,
+                    AgentStartEvent,
+                    AgentDoneEvent,
+                ),
+            ):
                 searchable_text = f"{event.agent}"
             elif isinstance(event, (LLMCallStartEvent, LLMCallEndEvent)):
                 searchable_text = f"{event.agent} {event.model}"
             elif isinstance(event, (CLITextChunkEvent, CLIThinkingEvent)):
                 text_val = getattr(
-                    event, 'text', getattr(event, 'content', ''),
+                    event,
+                    "text",
+                    getattr(event, "content", ""),
                 )
                 searchable_text = f"{event.agent} {text_val}"
             elif isinstance(event, CLIProgressEvent):
@@ -739,15 +740,9 @@ class ReplayApp(App[None]):
 
         for event in self.all_events:
             event_agent = getattr(event, "agent", None)
-            if (
-                (event_agent and event_agent == agent_name)
-                or (
-                    isinstance(event, MessageEvent)
-                    and (
-                        event.from_agent == agent_name
-                        or event.to == agent_name
-                    )
-                )
+            if (event_agent and event_agent == agent_name) or (
+                isinstance(event, MessageEvent)
+                and (event.from_agent == agent_name or event.to == agent_name)
             ):
                 self.filtered_events.append(event)
 
@@ -769,7 +764,6 @@ class ReplayApp(App[None]):
         self.current_index = 0
         self._update_event_display()
         self.notify(f"Found {len(self.filtered_events)} events of type '{event_type}'")
-
 
 
 def _load_verbose_data(session_file: Path) -> dict[int, Any]:
@@ -812,7 +806,8 @@ def _load_verbose_data(session_file: Path) -> dict[int, Any]:
     help="Directory containing session files (default: ./sessions)",
 )
 @click.option(
-    "-v", "--verbose",
+    "-v",
+    "--verbose",
     is_flag=True,
     help="Load full tool results from verbose sidecar.",
 )

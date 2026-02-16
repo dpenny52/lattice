@@ -214,8 +214,10 @@ class CLIBridge:
                             f" — rejecting message from {from_agent}"
                         )
                         record_error(
-                            self._recorder, self.name,
-                            error_msg, logger=logger,
+                            self._recorder,
+                            self.name,
+                            error_msg,
+                            logger=logger,
                         )
                         if self._on_response:
                             msg = f"[{self.name} queue full, message rejected]"
@@ -274,6 +276,7 @@ class CLIBridge:
 
         # Pre-flight memory check — refuse to spawn if system is too low.
         from lattice.memory_monitor import get_available_mb
+
         available = get_available_mb()
         if available is not None and available < _MIN_AVAILABLE_MB:
             error_msg = (
@@ -285,15 +288,17 @@ class CLIBridge:
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name,
+                    ts="",
+                    seq=0,
+                    agent=self.name,
                     error=f"Insufficient memory: {available:.0f}MB available",
-                    retrying=False, context="subprocess",
+                    retrying=False,
+                    context="subprocess",
                 )
             )
             if self._on_response:
                 msg = (
-                    f"[{self.name}: insufficient memory"
-                    f" ({available:.0f} MB available)]"
+                    f"[{self.name}: insufficient memory ({available:.0f} MB available)]"
                 )
                 await self._on_response(msg)
             self._current_claude_pid = None
@@ -309,8 +314,11 @@ class CLIBridge:
 
         try:
             cmd_args = [
-                "claude", "-p", prompt,
-                "--output-format", "stream-json",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "stream-json",
                 "--verbose",
             ]
 
@@ -324,16 +332,13 @@ class CLIBridge:
             # instead of accidentally hitting the API on the user's key.
             # Cap Node.js V8 heap to prevent OOM-killing the process tree.
             cli_env = {
-                k: v for k, v in os.environ.items()
-                if k not in _STRIPPED_ENV_KEYS
+                k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS
             }
             node_opts = cli_env.get("NODE_OPTIONS", "")
             if "--max-old-space-size" not in node_opts:
                 separator = " " if node_opts else ""
                 heap_flag = f"--max-old-space-size={_NODE_HEAP_LIMIT_MB}"
-                cli_env["NODE_OPTIONS"] = (
-                    f"{node_opts}{separator}{heap_flag}"
-                )
+                cli_env["NODE_OPTIONS"] = f"{node_opts}{separator}{heap_flag}"
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
@@ -353,8 +358,10 @@ class CLIBridge:
             )
             click.echo(error_msg, err=True)
             record_error(
-                self._recorder, self.name,
-                "Claude CLI not found", logger=logger,
+                self._recorder,
+                self.name,
+                "Claude CLI not found",
+                logger=logger,
             )
             self._current_claude_pid = None
             self._claude_busy = False
@@ -365,9 +372,12 @@ class CLIBridge:
             logger.error("%s: failed to spawn Claude CLI: %s", self.name, exc)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name,
+                    ts="",
+                    seq=0,
+                    agent=self.name,
                     error=f"Failed to spawn Claude CLI: {exc}",
-                    retrying=False, context="subprocess",
+                    retrying=False,
+                    context="subprocess",
                 )
             )
             self._current_claude_pid = None
@@ -409,8 +419,7 @@ class CLIBridge:
 
             # Record full stderr in session log
             full_error = (
-                f"Claude CLI exited with code {returncode}:"
-                f" {stderr_text[:2048]}"
+                f"Claude CLI exited with code {returncode}: {stderr_text[:2048]}"
             )
             record_error(self._recorder, self.name, full_error, logger=logger)
             self._current_claude_pid = None
@@ -502,7 +511,9 @@ class CLIBridge:
         return result_text
 
     async def _dispatch_claude_event(
-        self, event: dict[str, object], current_result: str,
+        self,
+        event: dict[str, object],
+        current_result: str,
     ) -> str:
         """Process a single streaming event from Claude CLI.
 
@@ -601,10 +612,7 @@ class CLIBridge:
 
             # Show user feedback when starting a queued message.
             if self._on_response:
-                msg = (
-                    f"[{self.name} processing queued message"
-                    f" from {from_agent}]"
-                )
+                msg = f"[{self.name} processing queued message from {from_agent}]"
                 await self._on_response(msg)
 
             # Record start/done events for each queued task.
@@ -638,12 +646,17 @@ class CLIBridge:
         self._pending_tasks[task_id] = future
 
         # Send task to subprocess stdin.
-        task_msg = json.dumps({
-            "type": "task",
-            "id": task_id,
-            "from": from_agent,
-            "content": content,
-        }) + "\n"
+        task_msg = (
+            json.dumps(
+                {
+                    "type": "task",
+                    "id": task_id,
+                    "from": from_agent,
+                    "content": content,
+                }
+            )
+            + "\n"
+        )
 
         try:
             proc.stdin.write(task_msg.encode())
@@ -719,8 +732,11 @@ class CLIBridge:
             logger.error("%s: subprocess exited with code %d", self.name, returncode)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name,
-                    error=error_msg, retrying=False,
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    error=error_msg,
+                    retrying=False,
                     context="subprocess",
                 )
             )

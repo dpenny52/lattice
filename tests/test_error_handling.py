@@ -40,6 +40,7 @@ class TestProviderAPIKeyErrors:
         # Google provider delays the check until chat() is called
         with pytest.raises(ValueError, match="GOOGLE_API_KEY not found"):
             import asyncio
+
             asyncio.run(provider.chat([], [], "gemini-2.0-flash"))
 
     def test_anthropic_with_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,7 +126,8 @@ class TestSubprocessErrorReporting:
 
         # Verify error message was shown with exact format
         error_calls = [
-            call for call in mock_echo.call_args_list
+            call
+            for call in mock_echo.call_args_list
             if len(call[0]) > 0 and "exited with code" in str(call[0][0])
         ]
         assert len(error_calls) > 0
@@ -189,9 +191,7 @@ class TestRateLimitErrors:
 
         # Create mock provider that raises a 429 error
         mock_provider = MagicMock(spec=LLMProvider)
-        mock_provider.chat = AsyncMock(
-            side_effect=Exception("429 rate_limit exceeded")
-        )
+        mock_provider.chat = AsyncMock(side_effect=Exception("429 rate_limit exceeded"))
 
         gate = RateLimitGate(pause_seconds=1.0)  # Short pause for testing
 
@@ -213,8 +213,7 @@ class TestRateLimitErrors:
         # Verify rate limit message was shown with exact format
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
         assert any(
-            "got a 429 from anthropic (rate limited)"
-            in str(call).lower()
+            "got a 429 from anthropic (rate limited)" in str(call).lower()
             for call in error_calls
         )
 
@@ -234,9 +233,7 @@ class TestRateLimitErrors:
 
         # Create mock provider that raises a 401 error
         mock_provider = MagicMock(spec=LLMProvider)
-        mock_provider.chat = AsyncMock(
-            side_effect=Exception("401 Unauthorized")
-        )
+        mock_provider.chat = AsyncMock(side_effect=Exception("401 Unauthorized"))
 
         agent = LLMAgent(
             name="test_agent",
@@ -255,8 +252,7 @@ class TestRateLimitErrors:
         # Verify auth error message was shown
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
         assert any(
-            "got a 401 from openai (authentication failed)"
-            in str(call).lower()
+            "got a 401 from openai (authentication failed)" in str(call).lower()
             for call in error_calls
         )
 
@@ -297,8 +293,7 @@ class TestRateLimitErrors:
         # Verify server error message was shown
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
         assert any(
-            "got a 500 from google (server error)"
-            in str(call).lower()
+            "got a 500 from google (server error)" in str(call).lower()
             for call in error_calls
         )
 

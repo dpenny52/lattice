@@ -359,7 +359,7 @@ class TestEventRecording:
                             arguments={
                                 "to": "agent-b",
                                 "content": "hi",
-                                },
+                            },
                         )
                     ],
                     usage=TokenUsage(10, 5),
@@ -547,9 +547,7 @@ class TestComputeMood:
         async def spy_callback(content: str) -> None:
             captured_mood.append(agent._compute_mood())
 
-        provider = MockProvider(
-            [LLMResponse(content="done!", usage=TokenUsage(5, 2))]
-        )
+        provider = MockProvider([LLMResponse(content="done!", usage=TokenUsage(5, 2))])
         agent = LLMAgent(
             name="agent-a",
             model_string="mock/test-model",

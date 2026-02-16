@@ -123,9 +123,7 @@ class AnthropicProvider:
                     # Merge into the previous user message.
                     api_messages[-1]["content"].append(result_block)
                 else:
-                    api_messages.append(
-                        {"role": "user", "content": [result_block]}
-                    )
+                    api_messages.append({"role": "user", "content": [result_block]})
 
             else:
                 # Plain user or assistant messages pass through.

@@ -33,8 +33,10 @@ from lattice.session.recorder import SessionRecorder
 
 def _sync_callback(captured: list[str]) -> Any:
     """Return an async callback that appends to *captured*."""
+
     async def _cb(content: str) -> None:
         captured.append(content)
+
     return _cb
 
 
@@ -167,9 +169,7 @@ class TestResponseCallback:
 
 
 class TestOnResponseCallback:
-    async def test_callback_fires_on_text_response(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_callback_fires_on_text_response(self, tmp_path: Path) -> None:
         """on_response fires when the agent produces a plain-text reply."""
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
@@ -186,9 +186,7 @@ class TestOnResponseCallback:
         assert captured == ["Hello from agent!"]
         recorder.close()
 
-    async def test_callback_not_called_on_empty_response(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_callback_not_called_on_empty_response(self, tmp_path: Path) -> None:
         """on_response does NOT fire when the LLM returns empty content."""
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
@@ -308,9 +306,7 @@ class TestReplLoop:
             await _repl_loop(router, "researcher", agents, shutdown)
 
         await asyncio.sleep(0.05)
-        writer_mock.handle_message.assert_called_once_with(
-            "user", "draft the intro"
-        )
+        writer_mock.handle_message.assert_called_once_with("user", "draft the intro")
         recorder.close()
 
     async def test_at_unknown_agent(self, tmp_path: Path, capsys: Any) -> None:
@@ -542,7 +538,9 @@ class TestMultiLineInput:
 
         mock_stdin = MagicMock()
         mock_stdin.readline.side_effect = [
-            "line 1\\\n", "line 2\\\n", "line 3\n",  # → joined message
+            "line 1\\\n",
+            "line 2\\\n",
+            "line 3\n",  # → joined message
             "/done\n",
         ]
         with (
@@ -569,7 +567,9 @@ class TestMultiLineInput:
 
         mock_stdin = MagicMock()
         mock_stdin.readline.side_effect = [
-            "@writer Please write a\\\n", "multi-line\\\n", "message\n",
+            "@writer Please write a\\\n",
+            "multi-line\\\n",
+            "message\n",
             "/done\n",
         ]
         with (
@@ -606,9 +606,7 @@ class TestMultiLineInput:
         entry_mock.handle_message.assert_called_once_with("user", "just one line")
         recorder.close()
 
-    async def test_empty_line_with_continuation_ignored(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_empty_line_with_continuation_ignored(self, tmp_path: Path) -> None:
         """Empty continuation lines are included in the message."""
         router, recorder = _make_router(tmp_path)
         entry_mock = MagicMock()
@@ -620,7 +618,9 @@ class TestMultiLineInput:
 
         mock_stdin = MagicMock()
         mock_stdin.readline.side_effect = [
-            "first\\\n", "\\\n", "last\n",  # → "first\n\nlast"
+            "first\\\n",
+            "\\\n",
+            "last\n",  # → "first\n\nlast"
             "/done\n",
         ]
         with (
@@ -648,11 +648,13 @@ class TestReadInputCancel:
         cancel.set()
 
         import pytest
+
         with pytest.raises(EOFError):
             _read_input(cancel)
 
     async def test_repl_exits_on_shutdown_during_read(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Setting shutdown_event mid-read causes the REPL to exit cleanly."""
         router, recorder = _make_router(tmp_path)

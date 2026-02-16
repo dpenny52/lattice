@@ -136,7 +136,8 @@ class TestShutdownDrain:
         """drain returns True when all pending tasks complete in time."""
         completed = asyncio.create_task(asyncio.sleep(0.01))
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, pending_tasks={completed},
+            tmp_path,
+            pending_tasks={completed},
         )
         result = await mgr._drain()
         assert result is True
@@ -147,7 +148,8 @@ class TestShutdownDrain:
         # Create a task that sleeps forever
         never_done = asyncio.create_task(asyncio.sleep(9999))
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, pending_tasks={never_done},
+            tmp_path,
+            pending_tasks={never_done},
         )
         # Use a very short timeout to keep the test fast
         mgr.DRAIN_TIMEOUT = 0.05
@@ -171,7 +173,8 @@ class TestShutdownKill:
     async def test_kill_cancels_remaining_tasks(self, tmp_path: Path) -> None:
         task = asyncio.create_task(asyncio.sleep(9999))
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, pending_tasks={task},
+            tmp_path,
+            pending_tasks={task},
         )
 
         await mgr._kill()
@@ -242,12 +245,15 @@ class TestShutdownClose:
         mock_end.assert_called_once_with("ctrl_c")
 
     async def test_close_prints_summary(
-        self, tmp_path: Path, capsys: Any,
+        self,
+        tmp_path: Path,
+        capsys: Any,
     ) -> None:
         agent = MagicMock()
         agent.shutdown = AsyncMock()
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, all_agents={"agent-a": agent},
+            tmp_path,
+            all_agents={"agent-a": agent},
         )
 
         await mgr._close("complete")
@@ -258,13 +264,15 @@ class TestShutdownClose:
         assert "events" in captured.out
 
     async def test_close_handles_agent_shutdown_error(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """_close() logs but doesn't crash on agent shutdown errors."""
         bad_agent = MagicMock()
         bad_agent.shutdown = AsyncMock(side_effect=RuntimeError("oops"))
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, all_agents={"bad": bad_agent},
+            tmp_path,
+            all_agents={"bad": bad_agent},
         )
 
         # Should not raise
@@ -307,7 +315,8 @@ class TestShutdownExecute:
         recorder.close()
 
     async def test_execute_kills_on_drain_timeout(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """execute() calls _kill() when _drain() returns False."""
         mgr, _, recorder = _make_shutdown_manager(tmp_path)
@@ -342,7 +351,8 @@ class TestShutdownExecute:
         agent = MagicMock()
         agent.shutdown = AsyncMock()
         mgr, _, recorder = _make_shutdown_manager(
-            tmp_path, all_agents={"a": agent},
+            tmp_path,
+            all_agents={"a": agent},
         )
 
         await mgr.execute("user_shutdown")
@@ -374,7 +384,9 @@ class TestPidfile:
         assert data["team"] == "team-x"
 
     def test_read_returns_none_when_missing(
-        self, tmp_path: Path, monkeypatch: Any,
+        self,
+        tmp_path: Path,
+        monkeypatch: Any,
     ) -> None:
         monkeypatch.setattr("lattice.pidfile.PIDFILE_DIR", tmp_path)
         assert read_pidfile() is None
@@ -388,7 +400,9 @@ class TestPidfile:
         assert not pidfile.exists()
 
     def test_remove_noop_when_missing(
-        self, tmp_path: Path, monkeypatch: Any,
+        self,
+        tmp_path: Path,
+        monkeypatch: Any,
     ) -> None:
         monkeypatch.setattr("lattice.pidfile.PIDFILE_DIR", tmp_path)
         # Should not raise
@@ -402,7 +416,9 @@ class TestPidfile:
         assert is_process_running(99999999) is False
 
     def test_read_returns_none_on_invalid_json(
-        self, tmp_path: Path, monkeypatch: Any,
+        self,
+        tmp_path: Path,
+        monkeypatch: Any,
     ) -> None:
         monkeypatch.setattr("lattice.pidfile.PIDFILE_DIR", tmp_path)
         pidfile = tmp_path / PIDFILE_NAME
@@ -493,6 +509,7 @@ class TestDownCommand:
         assert result.exit_code == 0
         assert "Shutting down session live" in result.output
         import signal as sig
+
         mock_kill.assert_called_once_with(12345, sig.SIGTERM)
 
     def test_permission_error(self) -> None:
@@ -531,6 +548,7 @@ class TestDownCommand:
         assert "SIGKILL" in result.output
         # Should have sent both SIGTERM and SIGKILL
         import signal as sig
+
         calls = mock_kill.call_args_list
         assert calls[0] == ((12345, sig.SIGTERM),)
         assert calls[1] == ((12345, sig.SIGKILL),)
@@ -545,7 +563,9 @@ class TestShutdownIntegration:
     async def test_session_jsonl_integrity(self, tmp_path: Path) -> None:
         """Full integration: router + recorder + shutdown produce valid JSONL."""
         recorder = SessionRecorder(
-            "test-team", "hash123", sessions_dir=tmp_path / "sessions",
+            "test-team",
+            "hash123",
+            sessions_dir=tmp_path / "sessions",
         )
         router = Router(topology=TopologyConfig(type="mesh"), recorder=recorder)
 

@@ -414,9 +414,7 @@ class WatchApp(App[None]):
 
         elif event_type == "session_end":
             self.stats.session_ended = True
-            self._add_event_line(
-                f"[red]Session ended[/red]: {event_dict['reason']}"
-            )
+            self._add_event_line(f"[red]Session ended[/red]: {event_dict['reason']}")
 
         elif event_type == "agent_start":
             agent_name = event_dict["agent"]
@@ -465,9 +463,9 @@ class WatchApp(App[None]):
         elif event_type == "llm_call_start":
             agent_name = event_dict["agent"]
             if agent_name in self.agents:
-                self.agents[agent_name].current_activity = (
-                    f"calling {event_dict['model']}"
-                )
+                self.agents[
+                    agent_name
+                ].current_activity = f"calling {event_dict['model']}"
 
         elif event_type == "llm_call_end":
             agent_name = event_dict["agent"]
@@ -530,9 +528,7 @@ class WatchApp(App[None]):
             retrying = event_dict["retrying"]
 
             retry_str = " (retrying)" if retrying else ""
-            self._add_event_line(
-                f"[red]Error[/red]: {agent_name}: {error}{retry_str}"
-            )
+            self._add_event_line(f"[red]Error[/red]: {agent_name}: {error}{retry_str}")
 
         elif event_type == "agent_response":
             agent_name = event_dict["agent"]
@@ -541,9 +537,7 @@ class WatchApp(App[None]):
                 self.agents[agent_name].current_activity = "responded"
 
             display_content = content.replace("\n", " ")
-            self._add_event_line(
-                f"[green]{agent_name}[/green]: {display_content}"
-            )
+            self._add_event_line(f"[green]{agent_name}[/green]: {display_content}")
 
         elif event_type == "cli_text_chunk":
             agent_name = event_dict["agent"]
@@ -552,9 +546,7 @@ class WatchApp(App[None]):
                 self.agents[agent_name].current_activity = "responding"
 
             display_text = text.replace("\n", " ")
-            self._add_event_line(
-                f"[green]{agent_name}[/green]: {display_text}"
-            )
+            self._add_event_line(f"[green]{agent_name}[/green]: {display_text}")
 
         elif event_type == "cli_tool_call":
             agent_name = event_dict["agent"]
@@ -596,13 +588,9 @@ class WatchApp(App[None]):
 
             if boundary == "start":
                 self.stats.loop_iteration = iteration
-                self._add_event_line(
-                    f"[bold cyan]Loop {iteration} started[/bold cyan]"
-                )
+                self._add_event_line(f"[bold cyan]Loop {iteration} started[/bold cyan]")
             else:
-                self._add_event_line(
-                    f"[bold cyan]Loop {iteration} ended[/bold cyan]"
-                )
+                self._add_event_line(f"[bold cyan]Loop {iteration} ended[/bold cyan]")
 
     def _add_event_line(self, event_str: str) -> None:
         """Add an event line to the latest panel."""

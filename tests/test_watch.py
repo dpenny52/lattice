@@ -65,7 +65,8 @@ def test_watch_app_initialization(tmp_path: Path):
 
 
 def test_find_latest_session_no_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test _find_latest_session with no session files."""
     # Change to tmp directory with no sessions
@@ -75,7 +76,8 @@ def test_find_latest_session_no_sessions(
 
 
 def test_find_latest_session_with_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test _find_latest_session returns most recent session."""
     monkeypatch.chdir(tmp_path)

@@ -66,7 +66,8 @@ class RateLimitGate:
     def pause(self) -> None:
         """Activate the gate — all agents will wait before their next call."""
         self._resume_at = max(
-            self._resume_at, time.monotonic() + self._pause_seconds,
+            self._resume_at,
+            time.monotonic() + self._pause_seconds,
         )
         pause_secs = int(self._pause_seconds)
         click.echo(
@@ -142,7 +143,9 @@ class LLMAgent:
         # Tool registry.
         resolved_paths = [Path(p).expanduser() for p in (allowed_paths or [])]
         self._tools = ToolRegistry(
-            name, router, recorder,
+            name,
+            router,
+            recorder,
             configured_tools=configured_tools,
             allowed_paths=resolved_paths or None,
         )
@@ -164,10 +167,12 @@ class LLMAgent:
             AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="llm")
         )
 
-        self._thread.append({
-            "role": "user",
-            "content": f"[from {from_agent}]: {content}",
-        })
+        self._thread.append(
+            {
+                "role": "user",
+                "content": f"[from {from_agent}]: {content}",
+            }
+        )
 
         await self._run_loop(self._thread)
 
@@ -195,10 +200,10 @@ class LLMAgent:
         - ``"success"``   → 😊 (happy)
         """
         return {
-            "idle": "\U0001f634",      # 😴
+            "idle": "\U0001f634",  # 😴
             "thinking": "\U0001f914",  # 🤔
-            "error": "\U0001f621",     # 😡
-            "success": "\U0001f60a",   # 😊
+            "error": "\U0001f621",  # 😡
+            "success": "\U0001f60a",  # 😊
         }.get(self._state, "\U0001f634")
 
     # ------------------------------------------------------------------ #
@@ -232,7 +237,10 @@ class LLMAgent:
                     thread.append({"role": "assistant", "content": response.content})
                     self._recorder.record(
                         AgentResponseEvent(
-                            ts="", seq=0, agent=self.name, content=response.content,
+                            ts="",
+                            seq=0,
+                            agent=self.name,
+                            content=response.content,
                         )
                     )
                     if self._on_response is not None:
@@ -321,9 +329,7 @@ class LLMAgent:
 
                 # Generate user-friendly error message
                 provider = (
-                    self._model.split("/")[0]
-                    if "/" in self._model
-                    else "provider"
+                    self._model.split("/")[0] if "/" in self._model else "provider"
                 )
                 if self._is_rate_limit_error(exc):
                     pause = int(_RATE_LIMIT_PAUSE)
@@ -383,10 +389,7 @@ class LLMAgent:
                             f" Retrying in {delay:.0f}s..."
                         )
                     else:
-                        user_msg = (
-                            f"Agent '{self.name}'"
-                            f" — network error: {safe_error}"
-                        )
+                        user_msg = f"Agent '{self.name}' — network error: {safe_error}"
                     click.echo(user_msg, err=True)
                 else:
                     user_msg = f"Agent '{self.name}' — LLM call failed: {safe_error}"
@@ -455,7 +458,9 @@ class LLMAgent:
 
     @staticmethod
     def _compact_tool_results(
-        thread: list[dict[str, Any]], *, up_to: int,
+        thread: list[dict[str, Any]],
+        *,
+        up_to: int,
     ) -> None:
         """Replace large tool results with compact stubs in-place.
 
@@ -495,4 +500,3 @@ class LLMAgent:
                 "This is normal; do not consider yourself stuck while waiting."
             )
         return "\n".join(parts)
-

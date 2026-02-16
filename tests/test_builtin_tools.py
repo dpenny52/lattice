@@ -184,9 +184,7 @@ class TestFileWrite:
 
     async def test_write_overwrites_existing(self, working_dir: Path) -> None:
         (working_dir / "exist.txt").write_text("old")
-        await handle_file_write(
-            {"path": "exist.txt", "content": "new"}, working_dir
-        )
+        await handle_file_write({"path": "exist.txt", "content": "new"}, working_dir)
         assert (working_dir / "exist.txt").read_text() == "new"
 
     async def test_write_path_traversal_rejected(self, working_dir: Path) -> None:
@@ -378,9 +376,7 @@ class TestToolRegistryConfiguration:
         assert "file-write" not in names
         assert "code-exec" not in names
 
-    def test_all_builtin_tools(
-        self, router: Router, recorder: SessionRecorder
-    ) -> None:
+    def test_all_builtin_tools(self, router: Router, recorder: SessionRecorder) -> None:
         reg = ToolRegistry(
             "agent",
             router,

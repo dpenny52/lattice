@@ -284,7 +284,9 @@ async def handle_code_exec(arguments: dict[str, Any]) -> str:
     )
 
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", code,
+        sys.executable,
+        "-c",
+        code,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -295,16 +297,20 @@ async def handle_code_exec(arguments: dict[str, Any]) -> str:
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        return json.dumps({
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": "Execution timed out",
-            "timed_out": True,
-        })
+        return json.dumps(
+            {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "Execution timed out",
+                "timed_out": True,
+            }
+        )
 
-    return json.dumps({
-        "exit_code": proc.returncode,
-        "stdout": stdout_bytes.decode("utf-8", errors="replace"),
-        "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-        "timed_out": False,
-    })
+    return json.dumps(
+        {
+            "exit_code": proc.returncode,
+            "stdout": stdout_bytes.decode("utf-8", errors="replace"),
+            "stderr": stderr_bytes.decode("utf-8", errors="replace"),
+            "timed_out": False,
+        }
+    )

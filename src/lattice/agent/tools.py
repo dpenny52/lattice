@@ -146,12 +146,16 @@ class ToolRegistry:
 
         if name == "file-read":
             return await handle_file_read(
-                arguments, self._working_dir, self._allowed_paths,
+                arguments,
+                self._working_dir,
+                self._allowed_paths,
             )
 
         if name == "file-write":
             return await handle_file_write(
-                arguments, self._working_dir, self._allowed_paths,
+                arguments,
+                self._working_dir,
+                self._allowed_paths,
             )
 
         if name == "code-exec":

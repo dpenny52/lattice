@@ -45,9 +45,7 @@ class AgentMemoryLogger:
 
     def write(self, snapshot: dict[str, Any]) -> None:
         """Append a timestamped snapshot line to the JSONL file."""
-        ts = datetime.now(tz=UTC).strftime(
-            "%Y-%m-%dT%H:%M:%S.%f"
-        )[:-3] + "Z"
+        ts = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         snapshot["ts"] = ts
         with self._lock:
             if self._fh.closed:
@@ -122,12 +120,14 @@ class AgentMemoryProfiler(BackgroundLoop):
         for name, (agent_type, agent) in self._agents.items():
             try:
                 snapshot = self._snapshot_agent(
-                    name, agent_type, agent, system_available, host_rss,
+                    name,
+                    agent_type,
+                    agent,
+                    system_available,
+                    host_rss,
                 )
                 # Write to main session JSONL first (before sidecar mutates dict).
-                self._recorder.record(
-                    MemorySnapshotEvent(ts="", seq=0, **snapshot)
-                )
+                self._recorder.record(MemorySnapshotEvent(ts="", seq=0, **snapshot))
 
                 # Write to per-agent sidecar JSONL.
                 agent_logger = self._loggers.get(name)

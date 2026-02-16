@@ -71,7 +71,11 @@ class Router:
     def _record_message(self, from_agent: str, to_agent: str, content: str) -> None:
         self._recorder.record(
             MessageEvent(
-                ts="", seq=0, from_agent=from_agent, to=to_agent, content=content,
+                ts="",
+                seq=0,
+                from_agent=from_agent,
+                to=to_agent,
+                content=content,
             )
         )
 
@@ -94,12 +98,9 @@ class Router:
 
         # "user" and "__system__" bypass topology — god mode.
         # Sends TO "user" also bypass — "user" isn't in the topology graph.
-        if (
-            not self._is_route_bypassed(from_agent, to_agent)
-            and not self._topology.is_allowed(
-                from_agent, to_agent
-            )
-        ):
+        if not self._is_route_bypassed(
+            from_agent, to_agent
+        ) and not self._topology.is_allowed(from_agent, to_agent):
             msg = f"Route from '{from_agent}' to '{to_agent}' is not allowed"
             raise RouteNotAllowedError(msg)
 
@@ -111,8 +112,7 @@ class Router:
         if from_agent != "user" and to_agent != "user":
             preview = self._truncate_preview(content)
             click.echo(
-                click.style(f"  {from_agent} → {to_agent}: ", fg="cyan")
-                + preview
+                click.style(f"  {from_agent} → {to_agent}: ", fg="cyan") + preview
             )
 
         # Dispatch asynchronously — task is tracked to prevent GC
@@ -157,19 +157,14 @@ class Router:
                 if from_agent != "user" and target != "user":
                     preview = self._truncate_preview(content)
                     click.echo(
-                        click.style(f"  {from_agent} → {target}: ", fg="cyan")
-                        + preview
+                        click.style(f"  {from_agent} → {target}: ", fg="cyan") + preview
                     )
 
                 agent = self._agents[target]
-                task = asyncio.create_task(
-                    agent.handle_message(from_agent, content)
-                )
+                task = asyncio.create_task(agent.handle_message(from_agent, content))
                 tasks.append(task)
             except Exception:
-                logger.exception(
-                    "Broadcast error setting up dispatch to '%s'", target
-                )
+                logger.exception("Broadcast error setting up dispatch to '%s'", target)
 
         # Await all tasks, isolating errors
         results = await asyncio.gather(*tasks, return_exceptions=True)

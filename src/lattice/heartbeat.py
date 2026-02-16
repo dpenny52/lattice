@@ -120,7 +120,9 @@ class Heartbeat(BackgroundLoop):
 
         try:
             await self._router.send(
-                SYSTEM_SENDER, self._entry_agent, _HEARTBEAT_PROMPT,
+                SYSTEM_SENDER,
+                self._entry_agent,
+                _HEARTBEAT_PROMPT,
             )
         except Exception:
             logger.exception("Failed to send heartbeat to %s", self._entry_agent)

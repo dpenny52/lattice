@@ -130,7 +130,8 @@ class TestHeartbeatFire:
 
         # Check that a StatusEvent was recorded
         status_calls = [
-            c for c in mock_record.call_args_list
+            c
+            for c in mock_record.call_args_list
             if isinstance(c[0][0], StatusEvent) and c[0][0].status == "heartbeat_sent"
         ]
         assert len(status_calls) == 1
@@ -153,7 +154,8 @@ class TestHeartbeatLoop:
     async def test_loop_fires_after_interval(self, tmp_path: Path) -> None:
         """The heartbeat loop fires after the configured interval."""
         heartbeat, router, recorder, shutdown = _make_heartbeat(
-            tmp_path, interval=1,
+            tmp_path,
+            interval=1,
         )
         agent = router._agents["agent-a"]
 
@@ -170,7 +172,8 @@ class TestHeartbeatLoop:
     async def test_loop_paused_skips_fire(self, tmp_path: Path) -> None:
         """The heartbeat loop skips firing when paused."""
         heartbeat, router, recorder, shutdown = _make_heartbeat(
-            tmp_path, interval=1,
+            tmp_path,
+            interval=1,
         )
         agent = router._agents["agent-a"]
 
@@ -187,7 +190,8 @@ class TestHeartbeatLoop:
     async def test_loop_resumes_after_unpause(self, tmp_path: Path) -> None:
         """The heartbeat loop fires after resuming from pause."""
         heartbeat, router, recorder, shutdown = _make_heartbeat(
-            tmp_path, interval=1,
+            tmp_path,
+            interval=1,
         )
         agent = router._agents["agent-a"]
 
@@ -222,7 +226,8 @@ class TestHeartbeatLoop:
     async def test_shutdown_event_stops_loop(self, tmp_path: Path) -> None:
         """Setting the shutdown event stops the heartbeat loop."""
         heartbeat, _, recorder, shutdown = _make_heartbeat(
-            tmp_path, interval=1,
+            tmp_path,
+            interval=1,
         )
         await heartbeat.start()
         shutdown.set()
@@ -251,7 +256,8 @@ class TestHeartbeatResponseDetection:
             heartbeat.check_response("Waiting for input. [HEARTBEAT:STUCK]")
 
         status_calls = [
-            c for c in mock_record.call_args_list
+            c
+            for c in mock_record.call_args_list
             if isinstance(c[0][0], StatusEvent) and c[0][0].status == "heartbeat_stuck"
         ]
         assert len(status_calls) == 1
@@ -367,7 +373,9 @@ class TestHeartbeatReplIntegration:
         recorder.close()
 
     async def test_status_without_heartbeat_prints_idle(
-        self, tmp_path: Path, capsys: Any,
+        self,
+        tmp_path: Path,
+        capsys: Any,
     ) -> None:
         """/status without heartbeat falls back to static message."""
         result = await _handle_command("/status", {}, heartbeat=None)
@@ -400,9 +408,7 @@ class TestHeartbeatHook:
     async def test_install_hook_wraps_callback(self, tmp_path: Path) -> None:
         """_install_heartbeat_hook wraps the agent's on_response."""
         router, recorder = _make_router(tmp_path)
-        provider = MockProvider(
-            [LLMResponse(content="hi", usage=TokenUsage(10, 5))]
-        )
+        provider = MockProvider([LLMResponse(content="hi", usage=TokenUsage(10, 5))])
         captured: list[str] = []
 
         async def _capture(content: str) -> None:
@@ -434,13 +440,12 @@ class TestHeartbeatHook:
         recorder.close()
 
     async def test_install_hook_without_original_callback(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Hook works even if agent has no original callback."""
         router, recorder = _make_router(tmp_path)
-        provider = MockProvider(
-            [LLMResponse(content="hi", usage=TokenUsage(10, 5))]
-        )
+        provider = MockProvider([LLMResponse(content="hi", usage=TokenUsage(10, 5))])
         agent = LLMAgent(
             name="agent-a",
             model_string="mock/test",

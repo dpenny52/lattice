@@ -36,6 +36,7 @@ _CRITICAL_AVAILABLE_MB = 1024
 # macOS: direct Mach syscalls via ctypes
 # ------------------------------------------------------------------ #
 
+
 class _VMStatistics64(ctypes.Structure):
     """Mach vm_statistics64_data_t struct.
 
@@ -45,29 +46,29 @@ class _VMStatistics64(ctypes.Structure):
     """
 
     _fields_ = [
-        ("free_count", ctypes.c_uint),           # natural_t
-        ("active_count", ctypes.c_uint),         # natural_t
-        ("inactive_count", ctypes.c_uint),       # natural_t
-        ("wire_count", ctypes.c_uint),           # natural_t
-        ("zero_fill_count", ctypes.c_uint64),    # uint64_t
-        ("reactivations", ctypes.c_uint64),      # uint64_t
-        ("pageins", ctypes.c_uint64),            # uint64_t
-        ("pageouts", ctypes.c_uint64),           # uint64_t
-        ("faults", ctypes.c_uint64),             # uint64_t
-        ("cow_faults", ctypes.c_uint64),         # uint64_t
-        ("lookups", ctypes.c_uint64),            # uint64_t
-        ("hits", ctypes.c_uint64),               # uint64_t
-        ("purges", ctypes.c_uint64),             # uint64_t
-        ("purgeable_count", ctypes.c_uint),      # natural_t
-        ("speculative_count", ctypes.c_uint),    # natural_t
-        ("decompressions", ctypes.c_uint64),     # uint64_t
-        ("compressions", ctypes.c_uint64),       # uint64_t
-        ("swapins", ctypes.c_uint64),            # uint64_t
-        ("swapouts", ctypes.c_uint64),           # uint64_t
-        ("compressor_page_count", ctypes.c_uint),   # natural_t
-        ("throttled_count", ctypes.c_uint),          # natural_t
-        ("external_page_count", ctypes.c_uint),      # natural_t
-        ("internal_page_count", ctypes.c_uint),      # natural_t
+        ("free_count", ctypes.c_uint),  # natural_t
+        ("active_count", ctypes.c_uint),  # natural_t
+        ("inactive_count", ctypes.c_uint),  # natural_t
+        ("wire_count", ctypes.c_uint),  # natural_t
+        ("zero_fill_count", ctypes.c_uint64),  # uint64_t
+        ("reactivations", ctypes.c_uint64),  # uint64_t
+        ("pageins", ctypes.c_uint64),  # uint64_t
+        ("pageouts", ctypes.c_uint64),  # uint64_t
+        ("faults", ctypes.c_uint64),  # uint64_t
+        ("cow_faults", ctypes.c_uint64),  # uint64_t
+        ("lookups", ctypes.c_uint64),  # uint64_t
+        ("hits", ctypes.c_uint64),  # uint64_t
+        ("purges", ctypes.c_uint64),  # uint64_t
+        ("purgeable_count", ctypes.c_uint),  # natural_t
+        ("speculative_count", ctypes.c_uint),  # natural_t
+        ("decompressions", ctypes.c_uint64),  # uint64_t
+        ("compressions", ctypes.c_uint64),  # uint64_t
+        ("swapins", ctypes.c_uint64),  # uint64_t
+        ("swapouts", ctypes.c_uint64),  # uint64_t
+        ("compressor_page_count", ctypes.c_uint),  # natural_t
+        ("throttled_count", ctypes.c_uint),  # natural_t
+        ("external_page_count", ctypes.c_uint),  # natural_t
+        ("internal_page_count", ctypes.c_uint),  # natural_t
         ("total_uncompressed_pages_in_compressor", ctypes.c_uint64),  # uint64_t
     ]
 
@@ -114,7 +115,10 @@ def _get_available_mb_macos() -> float | None:
         count = ctypes.c_uint(_HOST_VM_INFO64_COUNT)
 
         ret = _libc.host_statistics64(
-            host, _HOST_VM_INFO64, ctypes.byref(stats), ctypes.byref(count),
+            host,
+            _HOST_VM_INFO64,
+            ctypes.byref(stats),
+            ctypes.byref(count),
         )
         if ret != 0:
             return None
@@ -151,6 +155,7 @@ def get_available_mb() -> float | None:
 # ------------------------------------------------------------------ #
 # Per-PID RSS measurement (no subprocess, no psutil)
 # ------------------------------------------------------------------ #
+
 
 #: macOS proc_taskinfo struct — must exactly match the <libproc.h>
 #: proc_taskinfo layout.  If Apple changes this struct in a future macOS
@@ -240,8 +245,7 @@ class MemoryMonitor(BackgroundLoop):
     def _should_start(self) -> bool:
         if self._total_mb <= 0:
             logger.warning(
-                "Could not determine system memory"
-                " — memory monitor disabled"
+                "Could not determine system memory — memory monitor disabled"
             )
             return False
 
@@ -253,7 +257,9 @@ class MemoryMonitor(BackgroundLoop):
         logger.info(
             "Memory monitor started: %.0f MB available"
             " / %.0f MB total (checking every %ds)",
-            test, self._total_mb, self._interval,
+            test,
+            self._total_mb,
+            self._interval,
         )
         return True
 

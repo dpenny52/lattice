@@ -489,7 +489,9 @@ class TestReplayCLI:
         assert "No sessions found" in result.output
 
     def test_load_specific_session(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # Create a test session
         session_file = tmp_path / "2026-02-14_team_xyz789.jsonl"
@@ -538,7 +540,9 @@ class TestReplayCLI:
         assert "Ambiguous" in result.output
 
     def test_verbose_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         session_file = tmp_path / "2026-02-14_team_test123.jsonl"
         _write_session_file(session_file, _minimal_session("test123", "test-team"))
@@ -579,10 +583,15 @@ class TestLoadVerboseData:
 
         # Write verbose entries
         with verbose_file.open("w", encoding="utf-8") as fh:
-            fh.write(json.dumps({
-                "seq": 1,
-                "full_result": {"status": "ok", "data": "test"},
-            }) + "\n")
+            fh.write(
+                json.dumps(
+                    {
+                        "seq": 1,
+                        "full_result": {"status": "ok", "data": "test"},
+                    }
+                )
+                + "\n"
+            )
             fh.write(json.dumps({"seq": 3, "full_result": {"error": "failed"}}) + "\n")
 
         data = _load_verbose_data(session_file)

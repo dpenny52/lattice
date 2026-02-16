@@ -16,6 +16,7 @@ faulthandler.enable()
 if hasattr(signal, "SIGPIPE"):
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
+
 # Log an atexit message so we can distinguish "process exited normally"
 # (atexit fires) from "process killed by signal" (atexit doesn't fire).
 def _exit_watchdog() -> None:
@@ -23,6 +24,7 @@ def _exit_watchdog() -> None:
         f"lattice process exiting (exit code {getattr(sys, 'last_value', '?')})",
         err=True,
     )
+
 
 atexit.register(_exit_watchdog)
 

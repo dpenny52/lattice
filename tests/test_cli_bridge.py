@@ -49,8 +49,10 @@ def _mock_available_memory():
 
 def _async_capture(captured: list[str]) -> Any:
     """Return an async callback that appends to *captured*."""
+
     async def _cb(content: str) -> None:
         captured.append(content)
+
     return _cb
 
 
@@ -149,15 +151,25 @@ def _make_mock_claude_process(
 
     # Pre-feed the text response if provided.
     if text_response:
-        stdout.feed(json.dumps({
-            "type": "assistant",
-            "message": {"content": [{"type": "text", "text": text_response}]},
-        }).encode() + b"\n")
+        stdout.feed(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": text_response}]},
+                }
+            ).encode()
+            + b"\n"
+        )
         # Claude CLI always emits a final "result" event with the aggregated text.
-        stdout.feed(json.dumps({
-            "type": "result",
-            "result": text_response,
-        }).encode() + b"\n")
+        stdout.feed(
+            json.dumps(
+                {
+                    "type": "result",
+                    "result": text_response,
+                }
+            ).encode()
+            + b"\n"
+        )
 
     return proc, stdout
 
@@ -218,9 +230,7 @@ class TestCustomCLI:
             await asyncio.sleep(0.01)
 
             # Run handle_message in background -- it will block on the future.
-            task = asyncio.create_task(
-                bridge.handle_message("user", "do something")
-            )
+            task = asyncio.create_task(bridge.handle_message("user", "do something"))
             await asyncio.sleep(0.01)
 
             # Extract the task_id that was written to stdin.
@@ -232,11 +242,14 @@ class TestCustomCLI:
 
             # Now feed the response with the actual task ID so the future resolves.
             stdout.feed(
-                json.dumps({
-                    "type": "result",
-                    "task_id": actual_task_id,
-                    "content": "done!",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": actual_task_id,
+                        "content": "done!",
+                    }
+                ).encode()
+                + b"\n"
             )
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -255,7 +268,8 @@ class TestCustomCLI:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             command="cat",
             on_response=_async_capture(captured),
         )
@@ -267,9 +281,7 @@ class TestCustomCLI:
             await bridge.start()
             await asyncio.sleep(0.01)
 
-            task = asyncio.create_task(
-                bridge.handle_message("user", "work")
-            )
+            task = asyncio.create_task(bridge.handle_message("user", "work"))
             await asyncio.sleep(0.01)
 
             # Extract the task_id from stdin.
@@ -280,11 +292,14 @@ class TestCustomCLI:
             actual_task_id = task_msg["id"]
 
             stdout.feed(
-                json.dumps({
-                    "type": "result",
-                    "task_id": actual_task_id,
-                    "content": "task complete",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": actual_task_id,
+                        "content": "task complete",
+                    }
+                ).encode()
+                + b"\n"
             )
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -307,7 +322,8 @@ class TestClaudeAdapter:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -330,15 +346,27 @@ class TestClaudeAdapter:
             await asyncio.sleep(0.01)
 
             # Feed streaming events (real Claude CLI format).
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "Analysis complete"}]},
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": "Analysis complete"}]
+                        },
+                    }
+                ).encode()
+                + b"\n"
+            )
             # Claude CLI emits a final "result" event with the aggregated text.
-            stdout.feed(json.dumps({
-                "type": "result",
-                "result": "Analysis complete",
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "result",
+                        "result": "Analysis complete",
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -442,19 +470,19 @@ class TestTaskTracking:
             await asyncio.sleep(0.01)
 
             for i in range(1, 4):
-                task = asyncio.create_task(
-                    bridge.handle_message("user", f"task {i}")
-                )
+                task = asyncio.create_task(bridge.handle_message("user", f"task {i}"))
                 await asyncio.sleep(0.01)
 
                 # Extract the actual task_id from the written message.
                 msg = json.loads(written_messages[-1].decode())
                 tid = msg["id"]
-                payload = json.dumps({
-                    "type": "result",
-                    "task_id": tid,
-                    "content": f"r{i}",
-                })
+                payload = json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": tid,
+                        "content": f"r{i}",
+                    }
+                )
                 stdout.feed(payload.encode() + b"\n")
                 await asyncio.wait_for(task, timeout=2.0)
 
@@ -579,21 +607,27 @@ class TestMessageRouting:
 
             # Subprocess sends a message to agent-b.
             stdout.feed(
-                json.dumps({
-                    "type": "message",
-                    "to": "agent-b",
-                    "content": "hello from cli",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "message",
+                        "to": "agent-b",
+                        "content": "hello from cli",
+                    }
+                ).encode()
+                + b"\n"
             )
             await asyncio.sleep(0.05)
 
             # Then return the result for the task.
             stdout.feed(
-                json.dumps({
-                    "type": "result",
-                    "task_id": actual_task_id,
-                    "content": "done",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": actual_task_id,
+                        "content": "done",
+                    }
+                ).encode()
+                + b"\n"
             )
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -635,21 +669,27 @@ class TestMessageRouting:
 
             # Subprocess tries to message a non-peer.
             stdout.feed(
-                json.dumps({
-                    "type": "message",
-                    "to": "secret-agent",
-                    "content": "sneaky message",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "message",
+                        "to": "secret-agent",
+                        "content": "sneaky message",
+                    }
+                ).encode()
+                + b"\n"
             )
             await asyncio.sleep(0.05)
 
             # Finish the task.
             stdout.feed(
-                json.dumps({
-                    "type": "result",
-                    "task_id": actual_task_id,
-                    "content": "done",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": actual_task_id,
+                        "content": "done",
+                    }
+                ).encode()
+                + b"\n"
             )
             await asyncio.wait_for(task, timeout=2.0)
 
@@ -680,9 +720,7 @@ class TestStatusEvents:
             await bridge.start()
             await asyncio.sleep(0.01)
 
-            task = asyncio.create_task(
-                bridge.handle_message("user", "search")
-            )
+            task = asyncio.create_task(bridge.handle_message("user", "search"))
             await asyncio.sleep(0.01)
 
             # Extract the task_id from stdin.
@@ -693,19 +731,25 @@ class TestStatusEvents:
             actual_task_id = task_msg["id"]
 
             stdout.feed(
-                json.dumps({
-                    "type": "status",
-                    "status": "searching arxiv...",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "status",
+                        "status": "searching arxiv...",
+                    }
+                ).encode()
+                + b"\n"
             )
             await asyncio.sleep(0.05)
 
             stdout.feed(
-                json.dumps({
-                    "type": "result",
-                    "task_id": actual_task_id,
-                    "content": "done",
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "result",
+                        "task_id": actual_task_id,
+                        "content": "done",
+                    }
+                ).encode()
+                + b"\n"
             )
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -759,9 +803,7 @@ class TestSubprocessCrash:
             await bridge.start()
             await asyncio.sleep(0.01)
 
-            task = asyncio.create_task(
-                bridge.handle_message("user", "do work")
-            )
+            task = asyncio.create_task(bridge.handle_message("user", "do work"))
             await asyncio.sleep(0.01)
 
             # Subprocess crashes (EOF).
@@ -892,10 +934,15 @@ class TestEventRecording:
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             task = asyncio.create_task(bridge.handle_message("user", "test"))
             await asyncio.sleep(0.01)
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "ok"}]},
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "ok"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout.close()
             await asyncio.wait_for(task, timeout=2.0)
 
@@ -922,7 +969,8 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -959,9 +1007,7 @@ class TestMessageQueuing:
         )
         with patch_exec:
             # Start first message.
-            task_1 = asyncio.create_task(
-                bridge.handle_message("user", "first task")
-            )
+            task_1 = asyncio.create_task(bridge.handle_message("user", "first task"))
 
             # Wait for the first subprocess to spawn.  By the time this event
             # fires, _claude_busy is already True and task_1 is blocked on
@@ -969,9 +1015,7 @@ class TestMessageQueuing:
             await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
 
             # Second message should queue (agent is busy) and return immediately.
-            task_2 = asyncio.create_task(
-                bridge.handle_message("user", "second task")
-            )
+            task_2 = asyncio.create_task(bridge.handle_message("user", "second task"))
             await asyncio.wait_for(task_2, timeout=2.0)
 
             assert "[cli-agent is busy, message queued]" in captured
@@ -979,14 +1023,26 @@ class TestMessageQueuing:
             # Now let first task complete by feeding data and closing stdout.
             # Also pre-close stdout_2 since _process_message_queue will
             # process the queued message inline before task_1 returns.
-            stdout_1.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "first response"}]},
-            }).encode() + b"\n")
-            stdout_1.feed(json.dumps({
-                "type": "result",
-                "result": "first response",
-            }).encode() + b"\n")
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": "first response"}]
+                        },
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "result",
+                        "result": "first response",
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout_1.close()
             stdout_2.close()
 
@@ -1002,7 +1058,8 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -1036,12 +1093,12 @@ class TestMessageQueuing:
             await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
 
         # Responses should appear in order.
-        response_texts = [
-            c for c in captured if c.startswith("response")
-        ]
+        response_texts = [c for c in captured if c.startswith("response")]
         expected = [
-            "response 1", "response 2",
-            "response 3", "response 4",
+            "response 1",
+            "response 2",
+            "response 3",
+            "response 4",
         ]
         assert response_texts == expected
         recorder.close()
@@ -1087,7 +1144,8 @@ class TestMessageQueuing:
                 bridge.handle_message("user", "first"),
             )
             await asyncio.wait_for(
-                first_task_started.wait(), timeout=2.0,
+                first_task_started.wait(),
+                timeout=2.0,
             )
 
             # Second message (queues -- agent is busy).
@@ -1098,13 +1156,25 @@ class TestMessageQueuing:
 
             # Let first task complete with session_id (from system init).
             # Pre-close stdout_2 since _process_message_queue runs inline.
-            stdout_1.feed(json.dumps({
-                "type": "system", "subtype": "init", "session_id": "conv-abc123",
-            }).encode() + b"\n")
-            stdout_1.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "first"}]},
-            }).encode() + b"\n")
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "system",
+                        "subtype": "init",
+                        "session_id": "conv-abc123",
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "first"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout_1.close()
             stdout_2.close()
 
@@ -1126,7 +1196,8 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -1157,7 +1228,8 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -1195,7 +1267,8 @@ class TestMessageQueuing:
                 bridge.handle_message("user", "t1"),
             )
             await asyncio.wait_for(
-                first_task_started.wait(), timeout=2.0,
+                first_task_started.wait(),
+                timeout=2.0,
             )
 
             task_2 = asyncio.create_task(
@@ -1207,10 +1280,15 @@ class TestMessageQueuing:
             assert "[cli-agent is busy, message queued]" in captured
 
             # Pre-close stdout_2 since _process_message_queue runs inline.
-            stdout_1.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "r1"}]},
-            }).encode() + b"\n")
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "r1"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout_1.close()
             stdout_2.close()
 
@@ -1223,14 +1301,16 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
 
         # First task fails.
         mock_proc_1, stdout_1 = _make_mock_claude_process(
-            text_response="", returncode=1,
+            text_response="",
+            returncode=1,
         )
         mock_proc_1.stderr.read = AsyncMock(
             return_value=b"error",
@@ -1244,7 +1324,8 @@ class TestMessageQueuing:
         call_count = 0
 
         async def mock_create_subprocess(
-            *args: Any, **kwargs: Any,
+            *args: Any,
+            **kwargs: Any,
         ) -> MagicMock:
             nonlocal call_count
             call_count += 1
@@ -1276,7 +1357,8 @@ class TestMessageQueuing:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )
@@ -1303,7 +1385,7 @@ class TestMessageQueuing:
         with patch_exec:
             tasks = [
                 asyncio.create_task(
-                    bridge.handle_message("user", f"msg-{i+1}"),
+                    bridge.handle_message("user", f"msg-{i + 1}"),
                 )
                 for i in range(num_tasks)
             ]
@@ -1314,7 +1396,7 @@ class TestMessageQueuing:
         task_responses = [c for c in captured if c.startswith("task-")]
         assert len(task_responses) == num_tasks
         for i in range(num_tasks):
-            assert task_responses[i] == f"task-{i+1}"
+            assert task_responses[i] == f"task-{i + 1}"
         recorder.close()
 
 
@@ -1475,14 +1557,24 @@ class TestClaudeStreaming:
             await asyncio.sleep(0.01)
 
             # Feed streaming text events (real Claude CLI format).
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "Hello "}]},
-            }).encode() + b"\n")
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "world!"}]},
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "Hello "}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "world!"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -1514,14 +1606,21 @@ class TestClaudeStreaming:
 
             # Feed tool use event (real Claude CLI format).
             stdout.feed(
-                json.dumps({
-                    "type": "assistant",
-                    "message": {"content": [{
-                        "type": "tool_use",
-                        "name": "file-read",
-                        "input": {"path": "/tmp/test.txt"},
-                    }]},
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "name": "file-read",
+                                    "input": {"path": "/tmp/test.txt"},
+                                }
+                            ]
+                        },
+                    }
+                ).encode()
+                + b"\n"
             )
             stdout.close()
 
@@ -1554,13 +1653,20 @@ class TestClaudeStreaming:
 
             # Feed thinking event (real Claude CLI format).
             stdout.feed(
-                json.dumps({
-                    "type": "assistant",
-                    "message": {"content": [{
-                        "type": "thinking",
-                        "thinking": "I need to analyze the problem first...",
-                    }]},
-                }).encode() + b"\n"
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "I need to analyze the problem first",
+                                }
+                            ]
+                        },
+                    }
+                ).encode()
+                + b"\n"
             )
             stdout.close()
 
@@ -1568,7 +1674,7 @@ class TestClaudeStreaming:
 
         thinking_events = [e for e in events if isinstance(e, CLIThinkingEvent)]
         assert len(thinking_events) == 1
-        assert thinking_events[0].content == "I need to analyze the problem first..."
+        assert thinking_events[0].content == "I need to analyze the problem first"
         recorder.close()
 
     async def test_stream_progress(self, tmp_path: Path) -> None:
@@ -1597,9 +1703,7 @@ class TestClaudeStreaming:
                 "subtype": "init",
                 "session_id": "test-123",
             }
-            stdout.feed(
-                json.dumps(init_event).encode() + b"\n"
-            )
+            stdout.feed(json.dumps(init_event).encode() + b"\n")
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -1631,10 +1735,15 @@ class TestClaudeStreaming:
             # Feed malformed JSON.
             stdout.feed(b"not json at all\n")
             # Then valid JSON (real Claude CLI format).
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "recovered"}]},
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "recovered"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -1670,9 +1779,7 @@ class TestClaudeStreaming:
                 "subtype": "init",
                 "session_id": "conv-xyz789",
             }
-            stdout.feed(
-                json.dumps(init_event).encode() + b"\n"
-            )
+            stdout.feed(json.dumps(init_event).encode() + b"\n")
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
@@ -1681,7 +1788,8 @@ class TestClaudeStreaming:
         recorder.close()
 
     async def test_stream_events_bracketed_by_agent_start_done(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Streaming events are bracketed by AgentStartEvent and AgentDoneEvent."""
         router, recorder = _make_router(tmp_path)
@@ -1701,26 +1809,28 @@ class TestClaudeStreaming:
             task = asyncio.create_task(bridge.handle_message("user", "test"))
             await asyncio.sleep(0.01)
 
-            stdout.feed(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "test"}]},
-            }).encode() + b"\n")
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "test"}]},
+                    }
+                ).encode()
+                + b"\n"
+            )
             stdout.close()
 
             await asyncio.wait_for(task, timeout=2.0)
 
         # Find the bracketing events.
         start_idx = next(
-            i for i, e in enumerate(events)
-            if isinstance(e, AgentStartEvent)
+            i for i, e in enumerate(events) if isinstance(e, AgentStartEvent)
         )
         done_idx = next(
-            i for i, e in enumerate(events)
-            if isinstance(e, AgentDoneEvent)
+            i for i, e in enumerate(events) if isinstance(e, AgentDoneEvent)
         )
         text_idx = next(
-            i for i, e in enumerate(events)
-            if isinstance(e, CLITextChunkEvent)
+            i for i, e in enumerate(events) if isinstance(e, CLITextChunkEvent)
         )
 
         # Text event should be between start and done.
@@ -1814,7 +1924,8 @@ class TestClaudeMemoryGate:
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
         bridge = _make_bridge(
-            router, recorder,
+            router,
+            recorder,
             cli_type="claude",
             on_response=_async_capture(captured),
         )

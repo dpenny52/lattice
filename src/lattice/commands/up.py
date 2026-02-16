@@ -72,7 +72,7 @@ def _install_siginfo_handlers(
             ("si_signo", ctypes.c_int),
             ("si_errno", ctypes.c_int),
             ("si_code", ctypes.c_int),
-            ("si_pid", ctypes.c_int),   # pid_t  = int32_t
+            ("si_pid", ctypes.c_int),  # pid_t  = int32_t
             ("si_uid", ctypes.c_uint),  # uid_t  = uint32_t
         ]
 
@@ -80,7 +80,10 @@ def _install_siginfo_handlers(
 
     # void handler(int signum, siginfo_t *info, void *ucontext)
     _HandlerFunc = ctypes.CFUNCTYPE(
-        None, ctypes.c_int, ctypes.POINTER(_SigInfo), ctypes.c_void_p,
+        None,
+        ctypes.c_int,
+        ctypes.POINTER(_SigInfo),
+        ctypes.c_void_p,
     )
 
     # macOS struct sigaction (union collapses to the 3-arg pointer when
@@ -99,7 +102,9 @@ def _install_siginfo_handlers(
 
         def _make(sv: int) -> object:
             def _handler(
-                _signum: int, info: object, _ctx: object,
+                _signum: int,
+                info: object,
+                _ctx: object,
             ) -> None:
                 _signal_sender_info.clear()
                 if info:
@@ -108,8 +113,10 @@ def _install_siginfo_handlers(
                     _signal_sender_info["code"] = info.contents.si_code  # type: ignore[attr-defined]
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(
-                        shutdown_callback, signal.Signals(sv).name,
+                        shutdown_callback,
+                        signal.Signals(sv).name,
                     )
+
             return _HandlerFunc(_handler)
 
         cfunc = _make(sig_value)
@@ -155,7 +162,9 @@ class UserAgent:
     "-f", "--file", "config_file", type=click.Path(), help="Config file path."
 )
 @click.option(
-    "--watch", "enable_watch", is_flag=True,
+    "--watch",
+    "enable_watch",
+    is_flag=True,
     help="Enable live TUI with input bar.",
 )
 @click.option(
@@ -169,7 +178,11 @@ class UserAgent:
     "iterations (omit for infinite).",
 )
 @click.option(
-    "-p", "--prompt", "initial_prompt", type=str, default=None,
+    "-p",
+    "--prompt",
+    "initial_prompt",
+    type=str,
+    default=None,
     help="Initial prompt to send to the entry agent (allows backgrounding).",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output.")
@@ -189,8 +202,11 @@ def up(
 
     asyncio.run(
         _run_session(
-            config, verbose, loop_iterations,
-            enable_watch, initial_prompt,
+            config,
+            verbose,
+            loop_iterations,
+            enable_watch,
+            initial_prompt,
         )
     )
 
@@ -209,11 +225,11 @@ async def _run_session(
 ) -> None:
     """Wire up all components and run the REPL until shutdown."""
     # 1. Create recorder
-    config_hash = hashlib.sha256(
-        config.model_dump_json().encode()
-    ).hexdigest()[:16]
+    config_hash = hashlib.sha256(config.model_dump_json().encode()).hexdigest()[:16]
     recorder = SessionRecorder(
-        team=config.team, config_hash=config_hash, verbose=verbose,
+        team=config.team,
+        config_hash=config_hash,
+        verbose=verbose,
     )
 
     # 2. Create router
@@ -296,7 +312,9 @@ async def _run_session(
             raise SystemExit(1) from exc
 
     all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge] = {
-        **agents, **cli_bridges, **script_bridges,
+        **agents,
+        **cli_bridges,
+        **script_bridges,
     }
 
     if not all_agents:
@@ -325,7 +343,8 @@ async def _run_session(
     # Catch unhandled exceptions in fire-and-forget tasks so they don't
     # vanish silently (theory 2 for the silent crash investigation).
     def _async_exception_handler(
-        loop: asyncio.AbstractEventLoop, context: dict[str, object],
+        loop: asyncio.AbstractEventLoop,
+        context: dict[str, object],
     ) -> None:
         msg = context.get("message", "Unhandled async exception")
         exc = context.get("exception")
@@ -421,12 +440,21 @@ async def _run_session(
         elif enable_watch:
             # Combined mode: run TUI with input bar
             shutdown_reason = await _watch_mode(
-                router, entry, all_agents, shutdown_event, heartbeat, recorder,
+                router,
+                entry,
+                all_agents,
+                shutdown_event,
+                heartbeat,
+                recorder,
                 initial_prompt,
             )
         else:
             shutdown_reason = await _repl_loop(
-                router, entry, all_agents, shutdown_event, heartbeat,
+                router,
+                entry,
+                all_agents,
+                shutdown_event,
+                heartbeat,
                 initial_prompt,
             )
     finally:
@@ -494,7 +522,8 @@ async def _repl_loop(
 
             try:
                 line = await asyncio.get_event_loop().run_in_executor(
-                    None, functools.partial(_read_input, thread_cancel),
+                    None,
+                    functools.partial(_read_input, thread_cancel),
                 )
             except EOFError:
                 break
@@ -506,7 +535,9 @@ async def _repl_loop(
             # -- Slash commands --------------------------------------------
             if line.startswith("/"):
                 should_break = await _handle_command(
-                    line, agents, heartbeat,
+                    line,
+                    agents,
+                    heartbeat,
                 )
                 if should_break:
                     break
@@ -772,7 +803,8 @@ async def _loop_mode(
         click.echo("Enter prompt for loop (this prompt will be re-run each iteration):")
         try:
             initial_prompt = await asyncio.get_event_loop().run_in_executor(
-                None, _read_input,
+                None,
+                _read_input,
             )
         except EOFError:
             return ("ctrl_c", 0)
@@ -796,9 +828,7 @@ async def _loop_mode(
 
         # Log loop boundary start
         recorder.record(
-            LoopBoundaryEvent(
-                ts="", seq=0, boundary="start", iteration=iteration
-            )
+            LoopBoundaryEvent(ts="", seq=0, boundary="start", iteration=iteration)
         )
 
         # Print visual separator
@@ -830,9 +860,7 @@ async def _loop_mode(
                     )
                 # Log loop boundary end
                 recorder.record(
-                    LoopBoundaryEvent(
-                        ts="", seq=0, boundary="end", iteration=iteration
-                    )
+                    LoopBoundaryEvent(ts="", seq=0, boundary="end", iteration=iteration)
                 )
                 return (reason, iteration)
 
@@ -845,17 +873,13 @@ async def _loop_mode(
             # Wait for tasks to complete, checking periodically
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
-                    asyncio.gather(
-                        *pending, return_exceptions=True
-                    ),
+                    asyncio.gather(*pending, return_exceptions=True),
                     timeout=0.5,
                 )
 
         # Log loop boundary end
         recorder.record(
-            LoopBoundaryEvent(
-                ts="", seq=0, boundary="end", iteration=iteration
-            )
+            LoopBoundaryEvent(ts="", seq=0, boundary="end", iteration=iteration)
         )
 
         # If we're shutting down externally (Ctrl+C), break

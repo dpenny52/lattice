@@ -343,9 +343,7 @@ class TestContextReset:
 
 
 class TestRunSessionIntegration:
-    async def test_loop_count_in_summary(
-        self, tmp_path: Path, capsys: Any
-    ) -> None:
+    async def test_loop_count_in_summary(self, tmp_path: Path, capsys: Any) -> None:
         """Loop count appears in the shutdown summary."""
         config = _make_config()
 
