@@ -108,9 +108,9 @@ def _install_siginfo_handlers(
             ) -> None:
                 _signal_sender_info.clear()
                 if info:
-                    _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore[attr-defined]
-                    _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore[attr-defined]
-                    _signal_sender_info["code"] = info.contents.si_code  # type: ignore[attr-defined]
+                    _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore
+                    _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore
+                    _signal_sender_info["code"] = info.contents.si_code  # type: ignore
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(
                         shutdown_callback,
@@ -131,7 +131,7 @@ def _install_siginfo_handlers(
             return False
 
     # prevent GC — stash on the loop which lives for the session
-    loop._siginfo_refs = refs  # type: ignore[attr-defined]
+    loop._siginfo_refs = refs  # type: ignore
     return True
 
 
