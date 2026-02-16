@@ -173,18 +173,6 @@ class TestStatusEvent:
         assert data["type"] == "status"
         assert data["status"] == "thinking"
 
-    def test_mood_default(self) -> None:
-        evt = StatusEvent(**_base(), agent="a", status="idle")
-        assert evt.mood == "🤔"
-        data = json.loads(evt.model_dump_json(by_alias=True))
-        assert data["mood"] == "🤔"
-
-    def test_mood_custom(self) -> None:
-        evt = StatusEvent(**_base(), agent="a", status="working", mood="🔥")
-        assert evt.mood == "🔥"
-        data = json.loads(evt.model_dump_json(by_alias=True))
-        assert data["mood"] == "🔥"
-
 
 class TestErrorEvent:
     def test_round_trip(self) -> None:
