@@ -44,9 +44,11 @@ def test_up_flags() -> None:
 
 
 def test_down_no_session() -> None:
-    result = CliRunner().invoke(cli, ["down"])
-    assert result.exit_code == 1
-    assert "No running session found" in result.output
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["down"])
+        assert result.exit_code == 1
+        assert "No running session found" in result.output
 
 
 def test_watch_no_session() -> None:

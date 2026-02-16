@@ -115,25 +115,20 @@ Running the dogfood config from inside a Claude Code session requires workaround
 
 3. **`--loop` mode race condition** — `_loop_mode` in `up.py` checks `router.pending_tasks` after a 50ms sleep + 500ms gather timeout. If the entry agent's task completes before spawned subtasks are tracked in `pending_tasks`, the loop exits prematurely (often in <1 second with only 7 events). The loop thinks there's no pending work because the _router_ task for the entry agent finished, even though the entry agent dispatched work to CLI agents that are still initializing.
 
-## Known Issue: Silent Process Crash
+## Resolved: Silent Process Crash (was killing itself via tests)
 
-The lattice Python process has been observed dying silently during sessions:
+The lattice process was dying silently ~3 minutes into dogfood sessions. No traceback, no crash report, no OOM — just gone.
 
-- **No session_end event** recorded in the JSONL
-- **No Python traceback** in stdout/stderr
-- **No macOS crash report** in `~/Library/Logs/DiagnosticReports/`
-- **No OOM kill** — system had ~10 GB available memory at the time
-- **Last recorded activity** — dev agent was running Bash tool calls (pytest) when the process vanished
+**Root cause:** `tests/test_cli.py::test_down_no_session` invoked `CliRunner().invoke(cli, ["down"])` without `isolated_filesystem()`. When lattice was running (`.lattice/session.pid` exists in CWD), the test read the real pidfile, confirmed the process was alive via `os.kill(pid, 0)`, and sent `os.kill(pid, SIGTERM)`. The crash always coincided with CLI agents running `pytest tests/` via Bash tool calls.
 
-The crash happened ~3 minutes into a session with active CLI subprocesses. Exit code 144 (SIGTERM) was observed on the shell wrapper, but it's unclear what sent the signal.
+**Fix:** Wrapped `test_down_no_session` with `runner.isolated_filesystem()` (matching the pattern `test_watch_no_session` already used). This ensures the test sees no pidfile and correctly returns "No running session found".
 
-Three theories, each now instrumented with diagnostics:
-
-1. **ctypes segfault** — `_VMStatistics64` struct in `memory_monitor.py` or `_ProcTaskInfo` for `proc_pidinfo()` could segfault if the struct layout doesn't match the running macOS version. **Mitigated:** `faulthandler.enable()` in `cli.py` dumps a traceback on segfault. If the atexit watchdog in `cli.py` does NOT fire, it was likely a hard kill (segfault or SIGKILL).
-
-2. **Shared process group signal** — CLI bridge subprocesses (Claude running pytest, etc.) shared the same process group as lattice. Any descendant sending a signal to its group (e.g. `kill(0, SIGTERM)`) would kill the parent. **Fixed:** `start_new_session=True` on both subprocess spawn sites in `cli_bridge.py` isolates child process groups. Signal handlers in `up.py` now log which signal was received. SIGPIPE explicitly ignored in `cli.py`.
-
-3. **Async exception swallowing** — `Router._task_done()` logged errors via `logger.error()` but no handler was configured, so dispatch errors vanished silently. If all async tasks failed and the REPL's `input()` executor was the only thing alive, the process could exit with no output. **Fixed:** `_task_done` now prints to stderr via `click.echo`. An asyncio exception handler in `up.py` catches unhandled exceptions from fire-and-forget tasks.
+**Diagnostics retained** (still useful for future debugging):
+- `faulthandler.enable()` in `cli.py` — dumps traceback on segfault
+- `start_new_session=True` on subprocess spawning — isolates child process groups
+- `SA_SIGINFO` signal handler in `up.py` — logs sender PID on SIGTERM
+- Atexit watchdog in `cli.py` — detects unclean exits
+- Asyncio exception handler in `up.py` — catches unhandled task exceptions
 
 ## Memory Profile: What We Know
 
