@@ -10,6 +10,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+import click
+
 from lattice.agent.providers import LLMProvider, LLMResponse, create_provider
 from lattice.agent.tools import ToolRegistry
 from lattice.router.router import Router
@@ -66,7 +68,6 @@ class RateLimitGate:
         self._resume_at = max(
             self._resume_at, time.monotonic() + self._pause_seconds,
         )
-        import click
         click.echo(
             f"⚠️  Rate limit hit — pausing all LLM calls for {int(self._pause_seconds)}s...",
             err=True,
@@ -315,20 +316,16 @@ class LLMAgent:
                 safe_error = _sanitize_error(exc)
 
                 # Generate user-friendly error message
-                import click
+                provider = self._model.split("/")[0] if "/" in self._model else "provider"
                 if self._is_rate_limit_error(exc):
-                    # Extract provider name from model string
-                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
                     if retrying:
                         user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited). Retrying in {int(_RATE_LIMIT_PAUSE)}s..."
                     else:
                         user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited)."
                     click.echo(user_msg, err=True)
                 elif "401" in safe_error or "unauthorized" in safe_error.lower() or "api key" in safe_error.lower() or "authentication" in safe_error.lower():
-                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
                     click.echo(f"Agent '{self.name}' got a 401 from {provider} (authentication failed). Check your API key.", err=True)
                 elif "500" in safe_error or "internal server" in safe_error.lower() or "service unavailable" in safe_error.lower():
-                    provider = self._model.split("/")[0] if "/" in self._model else "provider"
                     if retrying:
                         delay = _BASE_DELAY * (2 ** (attempt - 1))
                         user_msg = f"Agent '{self.name}' got a 500 from {provider} (server error). Retrying in {delay:.0f}s..."

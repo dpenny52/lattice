@@ -16,7 +16,8 @@ from lattice.agent.memory_profile import AgentMemoryProfiler
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
-from lattice.heartbeat import SYSTEM_SENDER, Heartbeat
+from lattice.constants import SYSTEM_SENDER
+from lattice.heartbeat import Heartbeat
 from lattice.memory_monitor import MemoryMonitor
 from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router

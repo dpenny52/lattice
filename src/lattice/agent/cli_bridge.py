@@ -10,6 +10,9 @@ import os
 import shlex
 from collections.abc import Awaitable, Callable
 
+import click
+
+from lattice.agent.helpers import format_stderr_preview, record_error
 from lattice.router.router import Router
 from lattice.session.models import (
     AgentDoneEvent,
@@ -206,12 +209,7 @@ class CLIBridge:
                     # Check if queue has space before adding.
                     if self._message_queue.full():
                         error_msg = f"Message queue full (100 messages) — rejecting message from {from_agent}"
-                        logger.error("%s: %s", self.name, error_msg)
-                        self._recorder.record(
-                            ErrorEvent(
-                                ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
-                            )
-                        )
+                        record_error(self._recorder, self.name, error_msg, logger=logger)
                         if self._on_response:
                             await self._on_response(f"[{self.name} queue full, message rejected]")
                         return
@@ -274,7 +272,6 @@ class CLIBridge:
                 f"Available: {available:.0f} MB, required: {_MIN_AVAILABLE_MB} MB. "
                 f"Close other applications to free memory."
             )
-            import click
             click.echo(error_msg, err=True)
             logger.error("%s: %s", self.name, error_msg)
             self._recorder.record(
@@ -332,20 +329,13 @@ class CLIBridge:
                 "Make sure 'claude' is installed and on your PATH.\n"
                 "Install: npm install -g @anthropic-ai/claude-code"
             )
-            import click
             click.echo(error_msg, err=True)
-            logger.error("%s: Claude CLI not found", self.name)
-            self._recorder.record(
-                ErrorEvent(
-                    ts="", seq=0, agent=self.name, error="Claude CLI not found", retrying=False, context="subprocess",
-                )
-            )
+            record_error(self._recorder, self.name, "Claude CLI not found", logger=logger)
             self._current_claude_pid = None
             self._claude_busy = False
             return
         except OSError as exc:
             error_msg = f"Agent '{self.name}' — failed to spawn Claude CLI: {exc}"
-            import click
             click.echo(error_msg, err=True)
             logger.error("%s: failed to spawn Claude CLI: %s", self.name, exc)
             self._recorder.record(
@@ -382,25 +372,17 @@ class CLIBridge:
             stderr_text = stderr_bytes.decode(errors="replace").strip()
 
             # Show last 5 lines of stderr for user-friendly output
-            stderr_lines = [line for line in stderr_text.split('\n') if line.strip()]
-            last_lines = stderr_lines[-5:] if len(stderr_lines) > 5 else stderr_lines
-            stderr_preview = "\n  ".join(last_lines)
+            stderr_preview = format_stderr_preview(stderr_text)
 
             error_msg = f"Agent '{self.name}' exited with code {returncode}."
             if stderr_preview:
                 error_msg += f" Stderr:\n  {stderr_preview}"
 
-            import click
             click.echo(error_msg, err=True)
 
             # Record full stderr in session log
             full_error = f"Claude CLI exited with code {returncode}: {stderr_text[:2048]}"
-            logger.error("%s: %s", self.name, full_error)
-            self._recorder.record(
-                ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=full_error, retrying=False, context="subprocess",
-                )
-            )
+            record_error(self._recorder, self.name, full_error, logger=logger)
             self._current_claude_pid = None
             self._claude_busy = False
             return
@@ -606,12 +588,7 @@ class CLIBridge:
         proc = self._process
         if proc is None or proc.stdin is None:
             error_msg = "Subprocess not running"
-            logger.error("%s: %s", self.name, error_msg)
-            self._recorder.record(
-                ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
-                )
-            )
+            record_error(self._recorder, self.name, error_msg, logger=logger)
             return
 
         # Generate task ID.
@@ -636,12 +613,7 @@ class CLIBridge:
             await proc.stdin.drain()
         except (BrokenPipeError, ConnectionResetError, OSError) as exc:
             error_msg = f"Failed to write to subprocess: {exc}"
-            logger.error("%s: %s", self.name, error_msg)
-            self._recorder.record(
-                ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
-                )
-            )
+            record_error(self._recorder, self.name, error_msg, logger=logger)
             self._pending_tasks.pop(task_id, None)
             if not future.done():
                 future.set_exception(RuntimeError(error_msg))
@@ -706,7 +678,6 @@ class CLIBridge:
         returncode = proc.returncode
         if returncode is not None and returncode != 0:
             error_msg = f"Agent '{self.name}' exited with code {returncode}."
-            import click
             click.echo(error_msg, err=True)
             logger.error("%s: subprocess exited with code %d", self.name, returncode)
             self._recorder.record(

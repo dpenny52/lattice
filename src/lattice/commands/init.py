@@ -69,7 +69,6 @@ GOOGLE_API_KEY=
 @click.option(
     "--force",
     is_flag=True,
-    default=False,
     help="Overwrite existing lattice.yaml if it exists.",
 )
 def init(force: bool) -> None:

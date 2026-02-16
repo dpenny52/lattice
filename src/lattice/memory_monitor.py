@@ -13,6 +13,10 @@ import logging
 import os
 import platform
 
+import click
+
+from lattice.background_loop import BackgroundLoop
+from lattice.constants import SYSTEM_SENDER
 from lattice.session.models import StatusEvent
 from lattice.session.recorder import SessionRecorder
 
@@ -213,7 +217,7 @@ def get_pid_rss_mb(pid: int) -> float | None:
     return _get_pid_rss_mb_linux(pid)
 
 
-class MemoryMonitor:
+class MemoryMonitor(BackgroundLoop):
     """Periodically checks system-wide available memory and logs warnings.
 
     Uses direct syscalls (Mach on macOS, /proc on Linux) instead of
@@ -226,56 +230,30 @@ class MemoryMonitor:
         shutdown_event: asyncio.Event,
         interval: int = _DEFAULT_INTERVAL,
     ) -> None:
+        super().__init__(shutdown_event=shutdown_event, interval=interval)
         self._recorder = recorder
-        self._shutdown_event = shutdown_event
-        self._interval = interval
-        self._task: asyncio.Task[None] | None = None
 
         self._total_mb = _get_total_system_mb()
         self._last_level: str = "ok"
 
-    async def start(self) -> None:
-        """Start the background monitoring loop."""
+    def _should_start(self) -> bool:
         if self._total_mb <= 0:
             logger.warning("Could not determine system memory — memory monitor disabled")
-            return
+            return False
 
-        # Verify we can actually read memory stats.
         test = get_available_mb()
         if test is None:
             logger.warning("Cannot read system memory stats — memory monitor disabled")
-            return
+            return False
 
         logger.info(
             "Memory monitor started: %.0f MB available / %.0f MB total (checking every %ds)",
             test, self._total_mb, self._interval,
         )
-        self._task = asyncio.create_task(self._loop())
+        return True
 
-    async def stop(self) -> None:
-        """Cancel the monitoring loop."""
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-
-    async def _loop(self) -> None:
-        """Sleep-and-check loop that runs until shutdown or cancellation."""
-        try:
-            while not self._shutdown_event.is_set():
-                elapsed = 0.0
-                while elapsed < self._interval:
-                    if self._shutdown_event.is_set():
-                        return
-                    await asyncio.sleep(min(1.0, self._interval - elapsed))
-                    elapsed += 1.0
-
-                self._check()
-        except asyncio.CancelledError:
-            return
+    async def _tick(self) -> None:
+        self._check()
 
     def _check(self) -> None:
         """Run a single memory check (synchronous — no subprocess)."""
@@ -301,8 +279,6 @@ class MemoryMonitor:
             return
 
         if level != self._last_level or level == "critical":
-            import click
-
             tag = "⚠️  LOW MEMORY" if level == "warn" else "🔴 CRITICAL MEMORY"
             msg = (
                 f"{tag}: {available_mb:.0f} MB available "
@@ -315,7 +291,7 @@ class MemoryMonitor:
                 StatusEvent(
                     ts="",
                     seq=0,
-                    agent="__system__",
+                    agent=SYSTEM_SENDER,
                     status=f"memory_{level}: {available_mb:.0f}MB available",
                 )
             )

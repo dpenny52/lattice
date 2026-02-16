@@ -6,6 +6,8 @@ import asyncio
 import logging
 import re
 
+from lattice.background_loop import BackgroundLoop
+from lattice.constants import SYSTEM_SENDER
 from lattice.router.router import Router
 from lattice.session.models import StatusEvent
 from lattice.session.recorder import SessionRecorder
@@ -27,11 +29,8 @@ _HEARTBEAT_PROMPT = (
 _DONE_RE = re.compile(r"\[HEARTBEAT:DONE\]", re.IGNORECASE)
 _STUCK_RE = re.compile(r"\[HEARTBEAT:STUCK\]", re.IGNORECASE)
 
-#: Special sender name for heartbeat messages (bypasses topology).
-SYSTEM_SENDER = "__system__"
 
-
-class Heartbeat:
+class Heartbeat(BackgroundLoop):
     """Sends periodic heartbeat messages to the entry agent.
 
     The heartbeat fires every *interval* seconds, sending a system-level
@@ -47,12 +46,10 @@ class Heartbeat:
         recorder: SessionRecorder,
         shutdown_event: asyncio.Event,
     ) -> None:
-        self._interval = interval
+        super().__init__(shutdown_event=shutdown_event, interval=interval)
         self._router = router
         self._entry_agent = entry_agent
         self._recorder = recorder
-        self._shutdown_event = shutdown_event
-        self._task: asyncio.Task[None] | None = None
         self._paused = False
         self._done_flag = False
         self._pending = False
@@ -61,21 +58,8 @@ class Heartbeat:
     # Public API
     # ------------------------------------------------------------------ #
 
-    async def start(self) -> None:
-        """Start the heartbeat timer loop as a background task."""
-        if self._interval <= 0:
-            return
-        self._task = asyncio.create_task(self._loop())
-
-    async def stop(self) -> None:
-        """Cancel the heartbeat timer and wait for cleanup."""
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+    def _should_start(self) -> bool:
+        return self._interval > 0
 
     async def fire(self) -> None:
         """Send an immediate heartbeat (used by ``/status``)."""
@@ -116,24 +100,11 @@ class Heartbeat:
     # Internal
     # ------------------------------------------------------------------ #
 
-    async def _loop(self) -> None:
-        """Sleep-and-fire loop that runs until shutdown or cancellation."""
-        try:
-            while not self._shutdown_event.is_set():
-                # Sleep in small increments so we can respond to shutdown
-                elapsed = 0.0
-                while elapsed < self._interval:
-                    if self._shutdown_event.is_set():
-                        return
-                    await asyncio.sleep(min(1.0, self._interval - elapsed))
-                    elapsed += 1.0
-
-                if self._paused:
-                    continue
-
-                await self._send_heartbeat()
-        except asyncio.CancelledError:
+    async def _tick(self) -> None:
+        """Send a heartbeat unless paused."""
+        if self._paused:
             return
+        await self._send_heartbeat()
 
     async def _send_heartbeat(self) -> None:
         """Send a single heartbeat message and record a status event."""

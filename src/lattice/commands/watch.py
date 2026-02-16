@@ -17,6 +17,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Input, Label, Static
 
+from lattice.constants import SYSTEM_SENDER
 from lattice.session.models import (
     AgentDoneEvent,
     AgentResponseEvent,
@@ -470,7 +471,7 @@ class WatchApp(App[None]):
 
             # Heartbeat responses routed as __system__ → user are already
             # shown as agent_response events — skip to avoid duplicates.
-            if from_agent == "__system__" and to_agent == "user":
+            if from_agent == SYSTEM_SENDER and to_agent == "user":
                 return
 
             display_content = content.replace("\n", " ")

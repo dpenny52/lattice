@@ -578,45 +578,31 @@ class ReplayApp(App[None]):
             self.current_index -= 1
             self._update_event_display()
 
-    def action_jump_to(self) -> None:
-        """Prompt for a sequence number to jump to."""
-        self.input_mode = "jump"
+    def _show_input_dialog(self, mode: str, placeholder: str) -> None:
+        """Show the input overlay with the given mode and placeholder."""
+        self.input_mode = mode
         input_overlay = self.query_one("#input-overlay")
         input_overlay.display = True
         input_field = self.query_one("#input-field", Input)
         input_field.value = ""
-        input_field.placeholder = "Enter sequence number (0-indexed)..."
+        input_field.placeholder = placeholder
         input_field.focus()
+
+    def action_jump_to(self) -> None:
+        """Prompt for a sequence number to jump to."""
+        self._show_input_dialog("jump", "Enter sequence number (0-indexed)...")
 
     def action_filter_search(self) -> None:
         """Prompt for a text search filter."""
-        self.input_mode = "search"
-        input_overlay = self.query_one("#input-overlay")
-        input_overlay.display = True
-        input_field = self.query_one("#input-field", Input)
-        input_field.value = ""
-        input_field.placeholder = "Search event content..."
-        input_field.focus()
+        self._show_input_dialog("search", "Search event content...")
 
     def action_filter_agent(self) -> None:
         """Prompt for an agent name filter."""
-        self.input_mode = "agent"
-        input_overlay = self.query_one("#input-overlay")
-        input_overlay.display = True
-        input_field = self.query_one("#input-field", Input)
-        input_field.value = ""
-        input_field.placeholder = "Filter by agent name..."
-        input_field.focus()
+        self._show_input_dialog("agent", "Filter by agent name...")
 
     def action_filter_type(self) -> None:
         """Prompt for an event type filter."""
-        self.input_mode = "type"
-        input_overlay = self.query_one("#input-overlay")
-        input_overlay.display = True
-        input_field = self.query_one("#input-field", Input)
-        input_field.value = ""
-        input_field.placeholder = "Filter by event type (e.g., message, tool_call)..."
-        input_field.focus()
+        self._show_input_dialog("type", "Filter by event type (e.g., message, tool_call)...")
 
     def action_clear_filter(self) -> None:
         """Clear any active filters."""

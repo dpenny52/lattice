@@ -10,6 +10,9 @@ import resource
 import shlex
 from collections.abc import Awaitable, Callable
 
+import click
+
+from lattice.agent.helpers import format_stderr_preview, record_error
 from lattice.router.router import Router
 from lattice.session.models import AgentDoneEvent, AgentStartEvent, ErrorEvent
 from lattice.session.recorder import SessionRecorder
@@ -70,7 +73,6 @@ class ScriptBridge:
         try:
             args = shlex.split(self._command)
         except ValueError as exc:
-            import click
             click.echo(f"Agent '{self.name}' — invalid command: {exc}", err=True)
             self._record_error(f"Invalid command: {exc}")
             return
@@ -83,7 +85,6 @@ class ScriptBridge:
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError:
-            import click
             click.echo(
                 f"Agent '{self.name}' — command not found: {args[0]}\n"
                 f"Make sure '{args[0]}' is installed and on your PATH.",
@@ -92,7 +93,6 @@ class ScriptBridge:
             self._record_error(f"Command not found: {args[0]}")
             return
         except OSError as exc:
-            import click
             click.echo(f"Agent '{self.name}' — failed to spawn subprocess: {exc}", err=True)
             self._record_error(f"Failed to spawn subprocess: {exc}")
             return
@@ -114,7 +114,6 @@ class ScriptBridge:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             await proc.wait()
-            import click
             click.echo(
                 f"Agent '{self.name}' — script timed out after {self._timeout}s",
                 err=True,
@@ -136,11 +135,8 @@ class ScriptBridge:
             stderr_text = stderr_bytes.decode(errors="replace").strip()
 
             # Show last 5 lines of stderr
-            stderr_lines = [line for line in stderr_text.split('\n') if line.strip()]
-            last_lines = stderr_lines[-5:] if len(stderr_lines) > 5 else stderr_lines
-            stderr_preview = "\n  ".join(last_lines)
+            stderr_preview = format_stderr_preview(stderr_text)
 
-            import click
             error_msg = f"Agent '{self.name}' exited with code {proc.returncode}."
             if stderr_preview:
                 click.echo(f"{error_msg} Stderr:\n  {stderr_preview}", err=True)
@@ -166,9 +162,4 @@ class ScriptBridge:
 
     def _record_error(self, error_msg: str) -> None:
         """Log and record an error event."""
-        logger.error("%s: %s", self.name, error_msg)
-        self._recorder.record(
-            ErrorEvent(
-                ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
-            )
-        )
+        record_error(self._recorder, self.name, error_msg, logger=logger)

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from lattice.background_loop import BackgroundLoop
 from lattice.memory_monitor import get_available_mb, get_pid_rss_mb
 from lattice.session.models import MemorySnapshotEvent
 from lattice.session.recorder import SessionRecorder
@@ -58,7 +59,7 @@ class AgentMemoryLogger:
                 self._fh.close()
 
 
-class AgentMemoryProfiler:
+class AgentMemoryProfiler(BackgroundLoop):
     """Periodically measures per-agent memory and writes to sidecar logs.
 
     Maintains a registry of agents and runs an async background loop
@@ -73,12 +74,10 @@ class AgentMemoryProfiler:
         session_base_name: str,
         interval: int = _DEFAULT_INTERVAL,
     ) -> None:
+        super().__init__(shutdown_event=shutdown_event, interval=interval)
         self._recorder = recorder
-        self._shutdown_event = shutdown_event
         self._sessions_dir = sessions_dir
         self._session_base_name = session_base_name
-        self._interval = interval
-        self._task: asyncio.Task[None] | None = None
 
         # Registry: name -> (agent_type, agent_object).
         self._agents: dict[str, tuple[str, Any]] = {}
@@ -92,45 +91,25 @@ class AgentMemoryProfiler:
         self._loggers[name] = AgentMemoryLogger(log_path)
         logger.debug("Memory profiler: registered %s (%s)", name, agent_type)
 
-    async def start(self) -> None:
-        """Start the background profiling loop."""
+    def _should_start(self) -> bool:
         if not self._agents:
             logger.debug("Memory profiler: no agents registered, not starting")
-            return
+            return False
         logger.info(
             "Memory profiler started: %d agents, %ds interval",
             len(self._agents),
             self._interval,
         )
-        self._task = asyncio.create_task(self._loop())
+        return True
 
     async def stop(self) -> None:
         """Cancel the profiling loop and close all file handles."""
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-
+        await super().stop()
         for agent_logger in self._loggers.values():
             agent_logger.close()
 
-    async def _loop(self) -> None:
-        """Sleep-and-snapshot loop until shutdown or cancellation."""
-        try:
-            while not self._shutdown_event.is_set():
-                elapsed = 0.0
-                while elapsed < self._interval:
-                    if self._shutdown_event.is_set():
-                        return
-                    await asyncio.sleep(min(1.0, self._interval - elapsed))
-                    elapsed += 1.0
-
-                self._snapshot_all()
-        except asyncio.CancelledError:
-            return
+    async def _tick(self) -> None:
+        self._snapshot_all()
 
     def _snapshot_all(self) -> None:
         """Take a memory snapshot for every registered agent."""

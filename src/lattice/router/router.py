@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 import click
 
 from lattice.config.models import TopologyConfig
+from lattice.constants import SYSTEM_SENDER
 from lattice.router.topology import create_topology
 from lattice.session.models import MessageEvent
 from lattice.session.recorder import SessionRecorder
@@ -58,6 +59,22 @@ class Router:
         """Register an agent by name."""
         self._agents[name] = agent
 
+    def _truncate_preview(self, content: str) -> str:
+        preview = content.replace("\n", " ")
+        if len(preview) > _PREVIEW_LEN:
+            preview = preview[:_PREVIEW_LEN] + "…"
+        return preview
+
+    def _is_route_bypassed(self, from_agent: str, to_agent: str) -> bool:
+        return from_agent in ("user", SYSTEM_SENDER) or to_agent == "user"
+
+    def _record_message(self, from_agent: str, to_agent: str, content: str) -> None:
+        self._recorder.record(
+            MessageEvent(
+                ts="", seq=0, from_agent=from_agent, to=to_agent, content=content,
+            )
+        )
+
     async def send(
         self,
         from_agent: str,
@@ -77,28 +94,17 @@ class Router:
 
         # "user" and "__system__" bypass topology — god mode.
         # Sends TO "user" also bypass — "user" isn't in the topology graph.
-        bypassed = from_agent in ("user", "__system__") or to_agent == "user"
-        if not bypassed and not self._topology.is_allowed(from_agent, to_agent):
+        if not self._is_route_bypassed(from_agent, to_agent) and not self._topology.is_allowed(from_agent, to_agent):
             msg = f"Route from '{from_agent}' to '{to_agent}' is not allowed"
             raise RouteNotAllowedError(msg)
 
         # Record before dispatch
-        self._recorder.record(
-            MessageEvent(
-                ts="",
-                seq=0,
-                from_agent=from_agent,
-                to=to_agent,
-                content=content,
-            )
-        )
+        self._record_message(from_agent, to_agent, content)
 
         # Print agent-to-agent messages to console (user messages are
         # already shown by UserAgent / the REPL input line).
         if from_agent != "user" and to_agent != "user":
-            preview = content.replace("\n", " ")
-            if len(preview) > _PREVIEW_LEN:
-                preview = preview[:_PREVIEW_LEN] + "…"
+            preview = self._truncate_preview(content)
             click.echo(
                 click.style(f"  {from_agent} → {to_agent}: ", fg="cyan")
                 + preview
@@ -131,12 +137,9 @@ class Router:
                     logger.warning("Broadcast skip: unknown agent '%s'", target)
                     continue
 
-                bypassed = (
-                    from_agent in ("user", "__system__") or target == "user"
-                )
-                if not bypassed and not self._topology.is_allowed(
+                if not self._is_route_bypassed(
                     from_agent, target
-                ):
+                ) and not self._topology.is_allowed(from_agent, target):
                     logger.warning(
                         "Broadcast skip: route '%s' -> '%s' not allowed",
                         from_agent,
@@ -144,20 +147,10 @@ class Router:
                     )
                     continue
 
-                self._recorder.record(
-                    MessageEvent(
-                        ts="",
-                        seq=0,
-                        from_agent=from_agent,
-                        to=target,
-                        content=content,
-                    )
-                )
+                self._record_message(from_agent, target, content)
 
                 if from_agent != "user" and target != "user":
-                    preview = content.replace("\n", " ")
-                    if len(preview) > _PREVIEW_LEN:
-                        preview = preview[:_PREVIEW_LEN] + "…"
+                    preview = self._truncate_preview(content)
                     click.echo(
                         click.style(f"  {from_agent} → {target}: ", fg="cyan")
                         + preview
