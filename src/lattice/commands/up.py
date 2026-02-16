@@ -33,6 +33,104 @@ from lattice.session.recorder import SessionRecorder
 from lattice.shutdown import ShutdownManager
 
 # ------------------------------------------------------------------ #
+# Signal sender capture (SA_SIGINFO via ctypes)
+# ------------------------------------------------------------------ #
+
+# Written by the ctypes signal handler, read by _signal_shutdown.
+_signal_sender_info: dict[str, int] = {}
+
+
+def _install_siginfo_handlers(
+    loop: asyncio.AbstractEventLoop,
+    shutdown_callback: Callable[[str], None],
+) -> bool:
+    """Install signal handlers with ``SA_SIGINFO`` to capture sender PID.
+
+    On macOS, uses ctypes to call ``sigaction(2)`` directly so we get
+    ``siginfo_t`` with ``si_pid`` and ``si_uid``.  Returns ``True`` on
+    success.  On non-Darwin or on failure, returns ``False`` so the
+    caller can fall back to ``asyncio.loop.add_signal_handler``.
+    """
+    if sys.platform != "darwin":
+        return False
+
+    try:
+        import ctypes
+        import ctypes.util
+
+        lib_path = ctypes.util.find_library("c")
+        if not lib_path:
+            return False
+        libc = ctypes.CDLL(lib_path)
+    except OSError:
+        return False
+
+    # macOS siginfo_t — first 5 fields only (we read via pointer so
+    # declaring a partial struct is fine).
+    class _SigInfo(ctypes.Structure):
+        _fields_ = [
+            ("si_signo", ctypes.c_int),
+            ("si_errno", ctypes.c_int),
+            ("si_code", ctypes.c_int),
+            ("si_pid", ctypes.c_int),   # pid_t  = int32_t
+            ("si_uid", ctypes.c_uint),  # uid_t  = uint32_t
+        ]
+
+    _SA_SIGINFO = 0x0040
+
+    # void handler(int signum, siginfo_t *info, void *ucontext)
+    _HandlerFunc = ctypes.CFUNCTYPE(
+        None, ctypes.c_int, ctypes.POINTER(_SigInfo), ctypes.c_void_p,
+    )
+
+    # macOS struct sigaction (union collapses to the 3-arg pointer when
+    # SA_SIGINFO is set; sigset_t = uint32_t on macOS).
+    class _SigAction(ctypes.Structure):
+        _fields_ = [
+            ("sa_sigaction", _HandlerFunc),
+            ("sa_mask", ctypes.c_uint32),
+            ("sa_flags", ctypes.c_int),
+        ]
+
+    refs: list[_HandlerFunc] = []  # prevent GC of C function pointers
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        sig_value = sig.value
+
+        def _make(sv: int) -> _HandlerFunc:
+            def _handler(
+                _signum: int, info: object, _ctx: object,
+            ) -> None:
+                _signal_sender_info.clear()
+                if info:
+                    _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore[union-attr]
+                    _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore[union-attr]
+                    _signal_sender_info["code"] = info.contents.si_code  # type: ignore[union-attr]
+                try:
+                    loop.call_soon_threadsafe(
+                        shutdown_callback, signal.Signals(sv).name,
+                    )
+                except RuntimeError:
+                    pass  # loop already closed
+            return _HandlerFunc(_handler)
+
+        cfunc = _make(sig_value)
+        refs.append(cfunc)
+
+        act = _SigAction()
+        act.sa_sigaction = cfunc
+        act.sa_mask = 0
+        act.sa_flags = _SA_SIGINFO
+
+        if libc.sigaction(sig_value, ctypes.byref(act), None) != 0:
+            return False
+
+    # prevent GC — stash on the loop which lives for the session
+    loop._siginfo_refs = refs  # type: ignore[attr-defined]
+    return True
+
+
+# ------------------------------------------------------------------ #
 # UserAgent — pseudo-agent that prints messages to the terminal
 # ------------------------------------------------------------------ #
 
@@ -236,17 +334,27 @@ async def _run_session(
         loop = asyncio.get_event_loop()
 
         def _signal_shutdown(sig_name: str) -> None:
+            sender = _signal_sender_info
+            sender_str = ""
+            if sender:
+                sender_str = (
+                    f" sender_pid={sender.get('pid', '?')}"
+                    f" sender_uid={sender.get('uid', '?')}"
+                    f" si_code={sender.get('code', 0):#x}"
+                )
             click.echo(
                 f"\nReceived {sig_name} "
                 f"(pid={os.getpid()} ppid={os.getppid()} "
-                f"pgid={os.getpgrp()} sid={os.getsid(0)})",
+                f"pgid={os.getpgrp()} sid={os.getsid(0)}{sender_str})",
                 err=True,
             )
             faulthandler.dump_traceback(file=sys.stderr)
             shutdown_event.set()
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _signal_shutdown, sig.name)
+        if not _install_siginfo_handlers(loop, _signal_shutdown):
+            # Fallback: asyncio handlers (no sender PID info)
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _signal_shutdown, sig.name)
 
     # 7. Create heartbeat
     heartbeat = Heartbeat(
