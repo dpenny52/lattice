@@ -40,10 +40,12 @@ agents:
     tools:
       - file-write
 
-# Topology — who can talk to whom
-# Options: mesh (default, everyone ↔ everyone), pipeline, hub, custom
-# topology:
-#   type: mesh
+# Topology — who can talk to whom (default: hub)
+# Options: hub (default, workers ↔ coordinator), mesh, pipeline, custom
+topology:
+  type: hub
+  coordinator: researcher
+  workers: [writer]
 
 # Communication settings
 # communication:

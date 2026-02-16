@@ -110,7 +110,7 @@ class TopologyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["mesh", "pipeline", "hub", "custom"] = Field(
-        default="mesh",
+        default="hub",
         description="Topology pattern",
     )
     flow: list[str] | None = Field(
@@ -138,12 +138,13 @@ class TopologyConfig(BaseModel):
                     msg = "Topology 'pipeline' requires 'flow'"
                     raise ValueError(msg)
             case "hub":
-                missing = [
-                    f for f in ("coordinator", "workers") if getattr(self, f) is None
-                ]
-                if missing:
-                    joined = " and ".join(f"'{f}'" for f in missing)
-                    msg = f"Topology 'hub' requires {joined}"
+                # coordinator/workers can be auto-inferred by LatticeConfig
+                # when omitted, so only validate if explicitly set
+                if self.coordinator and not self.workers:
+                    msg = "Topology 'hub' requires 'workers' when 'coordinator' is set"
+                    raise ValueError(msg)
+                if self.workers and not self.coordinator:
+                    msg = "Topology 'hub' requires 'coordinator' when 'workers' is set"
                     raise ValueError(msg)
             case "custom":
                 if not self.edges:
@@ -225,8 +226,19 @@ class LatticeConfig(BaseModel):
                 f"Entry agent '{self.entry}' not found — available agents: {available}"
             )
             raise ValueError(msg)
+        self._infer_hub_topology()
         self._validate_topology_references()
         return self
+
+    def _infer_hub_topology(self) -> None:
+        """Auto-populate coordinator/workers for hub topology when omitted."""
+        topo = self.topology
+        if topo.type != "hub" or topo.coordinator is not None:
+            return
+        # Entry agent becomes coordinator, everyone else becomes workers
+        assert self.entry is not None  # set above in this validator
+        topo.coordinator = self.entry
+        topo.workers = [name for name in self.agents if name != self.entry]
 
     def _validate_topology_references(self) -> None:
         agent_names = set(self.agents)

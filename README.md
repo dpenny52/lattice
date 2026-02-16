@@ -160,7 +160,7 @@ Hotkeys: `j`/`k` or arrows to navigate, `g` jump to seq, `/` search, `a` filter 
 | `description` | string | — | Human-readable description |
 | `entry` | string | first agent | Which agent receives user messages |
 | `agents` | dict | *required* | Agent definitions (at least one) |
-| `topology` | object | `{type: mesh}` | Communication topology |
+| `topology` | object | `{type: hub}` | Communication topology |
 | `communication` | object | see below | Protocol and recording settings |
 | `allowed_paths` | list | `[]` | Extra directories agents can access |
 
@@ -181,9 +181,9 @@ Type requirements: `llm` needs `model` + `role`. `cli` needs `role` + (`cli` or 
 
 | Type | Description | Extra fields |
 |------|-------------|-------------|
+| `hub` | Workers talk only to coordinator (default) | `coordinator`, `workers` |
 | `mesh` | Any agent can message any other | — |
 | `pipeline` | Sequential chain | `flow: [a, b, c]` |
-| `hub` | Workers talk only to coordinator | `coordinator`, `workers` |
 | `custom` | Explicit directed edges | `edges: {a: [b, c]}` |
 
 ### Communication

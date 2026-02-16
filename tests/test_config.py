@@ -58,7 +58,7 @@ class TestMinimalConfig:
     def test_defaults_applied(self) -> None:
         cfg = LatticeConfig.model_validate(_minimal_raw())
         assert cfg.entry == "agent1"
-        assert cfg.topology.type == "mesh"
+        assert cfg.topology.type == "hub"
         assert cfg.communication.protocol == "a2a"
         assert cfg.communication.record is True
 
@@ -216,9 +216,9 @@ class TestModelFormat:
 
 
 class TestTopology:
-    def test_defaults_to_mesh(self) -> None:
+    def test_defaults_to_hub(self) -> None:
         cfg = LatticeConfig.model_validate(_minimal_raw())
-        assert cfg.topology.type == "mesh"
+        assert cfg.topology.type == "hub"
 
     def test_pipeline_requires_flow(self) -> None:
         with pytest.raises(ValidationError, match="flow"):
@@ -228,9 +228,27 @@ class TestTopology:
         t = TopologyConfig.model_validate({"type": "pipeline", "flow": ["a", "b", "c"]})
         assert t.flow == ["a", "b", "c"]
 
-    def test_hub_requires_coordinator_and_workers(self) -> None:
-        with pytest.raises(ValidationError, match="coordinator.*workers"):
-            TopologyConfig.model_validate({"type": "hub"})
+    def test_hub_without_coordinator_workers_is_valid(self) -> None:
+        """Hub without coordinator/workers is OK — inferred later."""
+        t = TopologyConfig.model_validate({"type": "hub"})
+        assert t.coordinator is None
+        assert t.workers is None
+
+    def test_hub_coordinator_without_workers_raises(self) -> None:
+        with pytest.raises(ValidationError, match="workers"):
+            TopologyConfig.model_validate({"type": "hub", "coordinator": "lead"})
+
+    def test_hub_workers_without_coordinator_raises(self) -> None:
+        with pytest.raises(ValidationError, match="coordinator"):
+            TopologyConfig.model_validate({"type": "hub", "workers": ["w1"]})
+
+    def test_hub_auto_infer_from_entry(self) -> None:
+        """When hub coordinator/workers omitted, entry becomes coordinator."""
+        raw = _minimal_raw()
+        raw["agents"]["agent2"] = {"model": "anthropic/test", "role": "helper"}
+        cfg = LatticeConfig.model_validate(raw)
+        assert cfg.topology.coordinator == "agent1"
+        assert cfg.topology.workers == ["agent2"]
 
     def test_hub_valid(self) -> None:
         t = TopologyConfig.model_validate(
