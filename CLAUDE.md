@@ -71,7 +71,7 @@ Agent types:
 - `type: cli` — CLI subprocess agent (e.g. `cli: claude`)
 - `type: script` — one-shot script (runs per message, stateless)
 
-Topologies: `mesh`, `hub`, `pipeline`, `custom`
+Topologies: `hub` (default), `mesh`, `pipeline`, `custom`. Hub auto-infers entry agent as coordinator and remaining agents as workers when `coordinator`/`workers` are omitted.
 
 ## Dogfood Config (`lattice-dogfood.yaml`)
 

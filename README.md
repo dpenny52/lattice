@@ -23,7 +23,7 @@ The generated `lattice.yaml` is a working config with two example agents. Edit i
 
 ## Example Configs
 
-**Minimal — two LLM agents in a mesh:**
+**Minimal — two LLM agents in a hub (default):**
 
 ```yaml
 version: "1"
@@ -37,6 +37,8 @@ agents:
     model: openai/gpt-4o
     role: You write clear, concise content based on research.
 ```
+
+The default topology is `hub` — the first agent (`researcher`) becomes coordinator and all others become workers automatically. No topology block needed.
 
 **Pipeline — sequential handoff:**
 
@@ -58,7 +60,7 @@ topology:
   flow: [drafter, editor, formatter]
 ```
 
-**Hub — coordinator with workers:**
+**Hub — explicit coordinator with workers:**
 
 ```yaml
 version: "1"
@@ -87,6 +89,8 @@ topology:
 communication:
   heartbeat: 30
 ```
+
+Since `lead` is already the entry agent, the `coordinator` and `workers` fields could be omitted here — they'd be auto-inferred. Explicit is useful when you want a different agent as coordinator or want to exclude agents from the worker list.
 
 ## REPL
 
@@ -181,7 +185,7 @@ Type requirements: `llm` needs `model` + `role`. `cli` needs `role` + (`cli` or 
 
 | Type | Description | Extra fields |
 |------|-------------|-------------|
-| `hub` | Workers talk only to coordinator (default) | `coordinator`, `workers` |
+| `hub` | Workers talk only to coordinator (default). Auto-infers entry as coordinator if omitted. | `coordinator`, `workers` |
 | `mesh` | Any agent can message any other | — |
 | `pipeline` | Sequential chain | `flow: [a, b, c]` |
 | `custom` | Explicit directed edges | `edges: {a: [b, c]}` |
