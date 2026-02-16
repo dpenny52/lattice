@@ -101,3 +101,49 @@ Spec: `~/Documents/obsidian/general/lattice-v01-user-stories.md`
 - New tools go in `builtin_tools.py` with a JSON schema definition in `tools.py`
 - Agent console output uses `on_response` callback, agent-to-agent messages print via the router
 - Shutdown is managed by `ShutdownManager` with a 4-step sequence: signal → drain → kill → close
+
+## Running `lattice up` from Claude Code
+
+Running the dogfood config from inside a Claude Code session requires workarounds:
+
+1. **Nested session guard** — Claude CLI refuses to launch inside another Claude Code session (`CLAUDECODE` env var is set). Bypass with: `env -u CLAUDECODE .venv/bin/lattice up ...`
+
+2. **REPL stdin with `-p` flag** — When using `-p "prompt"` in a background process, the REPL hits `EOFError` on `input()` immediately after sending the prompt (no stdin). The session exits before CLI agents finish their work. Workaround: pipe a prompt followed by a long sleep to keep stdin open:
+   ```bash
+   (echo "your prompt"; sleep 600) | env -u CLAUDECODE .venv/bin/lattice up -f lattice-dogfood.yaml
+   ```
+
+3. **`--loop` mode race condition** — `_loop_mode` in `up.py` checks `router.pending_tasks` after a 50ms sleep + 500ms gather timeout. If the entry agent's task completes before spawned subtasks are tracked in `pending_tasks`, the loop exits prematurely (often in <1 second with only 7 events). The loop thinks there's no pending work because the _router_ task for the entry agent finished, even though the entry agent dispatched work to CLI agents that are still initializing.
+
+## Known Issue: Silent Process Crash
+
+The lattice Python process has been observed dying silently during sessions:
+
+- **No session_end event** recorded in the JSONL
+- **No Python traceback** in stdout/stderr
+- **No macOS crash report** in `~/Library/Logs/DiagnosticReports/`
+- **No OOM kill** — system had ~10 GB available memory at the time
+- **Last recorded activity** — dev agent was running Bash tool calls (pytest) when the process vanished
+
+The crash happened ~3 minutes into a session with active CLI subprocesses. Exit code 144 (SIGTERM) was observed on the shell wrapper, but it's unclear what sent the signal.
+
+Three theories, each now instrumented with diagnostics:
+
+1. **ctypes segfault** — `_VMStatistics64` struct in `memory_monitor.py` or `_ProcTaskInfo` for `proc_pidinfo()` could segfault if the struct layout doesn't match the running macOS version. **Mitigated:** `faulthandler.enable()` in `cli.py` dumps a traceback on segfault. If the atexit watchdog in `cli.py` does NOT fire, it was likely a hard kill (segfault or SIGKILL).
+
+2. **Shared process group signal** — CLI bridge subprocesses (Claude running pytest, etc.) shared the same process group as lattice. Any descendant sending a signal to its group (e.g. `kill(0, SIGTERM)`) would kill the parent. **Fixed:** `start_new_session=True` on both subprocess spawn sites in `cli_bridge.py` isolates child process groups. Signal handlers in `up.py` now log which signal was received. SIGPIPE explicitly ignored in `cli.py`.
+
+3. **Async exception swallowing** — `Router._task_done()` logged errors via `logger.error()` but no handler was configured, so dispatch errors vanished silently. If all async tasks failed and the REPL's `input()` executor was the only thing alive, the process could exit with no output. **Fixed:** `_task_done` now prints to stderr via `click.echo`. An asyncio exception handler in `up.py` catches unhandled exceptions from fire-and-forget tasks.
+
+## Memory Profile: What We Know
+
+Each Claude CLI subprocess (`type: cli, cli: claude`) uses **300–430 MB RSS** and grows over time. With 3 concurrent CLI agents (dev + code-reviewer + security-reviewer), expect **~1.2 GB** of subprocess memory on top of the host process (~85 MB).
+
+The pre-flight memory gate in `cli_bridge.py` blocks subprocess spawning when system available memory < 1 GB (`_MIN_AVAILABLE_MB = 1024`). On memory-constrained systems this can prevent all CLI agents from launching, leaving the session idle with only heartbeat pings.
+
+Memory sidecar files are written to `sessions/<session>.<agent>.memory.jsonl` with snapshots every 10 seconds. Key fields:
+- `process_rss_mb` — host Python process RSS (same for all agents, ~85 MB)
+- `subprocess_rss_mb` — Claude CLI subprocess RSS (300-430 MB per agent)
+- `system_available_mb` — free + inactive + purgeable pages
+- `thread_size_kb` / `thread_messages` — LLM agent conversation thread size (grows with each exchange)
+- `queue_depth` — CLI bridge message queue (>0 means messages waiting for busy subprocess)

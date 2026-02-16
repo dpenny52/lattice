@@ -180,3 +180,8 @@ class Router:
             exc = task.exception()
             if exc is not None:
                 logger.error("Dispatch error: %s", exc)
+                # Also print to stderr — logger may have no handlers configured.
+                click.echo(
+                    click.style(f"  ⚠ dispatch error: {exc}", fg="red"),
+                    err=True,
+                )

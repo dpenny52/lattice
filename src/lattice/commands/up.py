@@ -210,12 +210,30 @@ async def _run_session(
     # 6. Enter REPL
     shutdown_event = asyncio.Event()
 
-    # Handle Ctrl+C / SIGTERM gracefully
-    # In watch mode, let Textual handle Ctrl+C via its quit action
+    # Catch unhandled exceptions in fire-and-forget tasks so they don't
+    # vanish silently (theory 2 for the silent crash investigation).
+    def _async_exception_handler(
+        loop: asyncio.AbstractEventLoop, context: dict[str, object],
+    ) -> None:
+        msg = context.get("message", "Unhandled async exception")
+        exc = context.get("exception")
+        click.echo(click.style(f"  ⚠ async error: {msg}", fg="red"), err=True)
+        if exc:
+            click.echo(f"    {type(exc).__name__}: {exc}", err=True)
+
+    asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
+
+    # Handle Ctrl+C / SIGTERM gracefully, with logging so we can tell
+    # whether a signal was received before the process died.
     if not enable_watch:
         loop = asyncio.get_event_loop()
+
+        def _signal_shutdown(sig_name: str) -> None:
+            click.echo(f"\nReceived {sig_name}, shutting down...", err=True)
+            shutdown_event.set()
+
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, shutdown_event.set)
+            loop.add_signal_handler(sig, _signal_shutdown, sig.name)
 
     # 7. Create heartbeat
     heartbeat = Heartbeat(

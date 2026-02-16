@@ -145,6 +145,7 @@ class CLIBridge:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
         self._started = True
         self._read_task = asyncio.create_task(self._read_loop())
@@ -321,6 +322,7 @@ class CLIBridge:
                 stderr=asyncio.subprocess.PIPE,
                 limit=_MAX_LINE_BYTES,
                 env=cli_env,
+                start_new_session=True,
             )
             self._current_claude_pid = proc.pid
         except FileNotFoundError:
