@@ -7,14 +7,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from lattice.agent.llm_agent import LLMAgent
 from lattice.agent.providers import LLMResponse, TokenUsage
 from lattice.commands.up import _loop_mode, _run_session
 from lattice.config.models import AgentConfig, LatticeConfig, TopologyConfig
 from lattice.router.router import Router
-from lattice.session.models import LoopBoundaryEvent
 from lattice.session.recorder import SessionRecorder
 
 # ------------------------------------------------------------------ #

@@ -239,7 +239,10 @@ class MemoryMonitor(BackgroundLoop):
 
     def _should_start(self) -> bool:
         if self._total_mb <= 0:
-            logger.warning("Could not determine system memory — memory monitor disabled")
+            logger.warning(
+                "Could not determine system memory"
+                " — memory monitor disabled"
+            )
             return False
 
         test = get_available_mb()
@@ -248,7 +251,8 @@ class MemoryMonitor(BackgroundLoop):
             return False
 
         logger.info(
-            "Memory monitor started: %.0f MB available / %.0f MB total (checking every %ds)",
+            "Memory monitor started: %.0f MB available"
+            " / %.0f MB total (checking every %ds)",
             test, self._total_mb, self._interval,
         )
         return True

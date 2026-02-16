@@ -193,7 +193,8 @@ class LatticeConfig(BaseModel):
     )
     allowed_paths: list[str] = Field(
         default_factory=list,
-        description="Additional directories agents can read/write outside the working directory",
+        description="Additional directories agents can "
+        "read/write outside the working directory",
     )
     agents: dict[str, AgentConfig] = Field(
         description="Agent definitions (at least one required)",

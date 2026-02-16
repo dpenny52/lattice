@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from lattice.agent.llm_agent import LLMAgent
 from lattice.agent.providers import LLMResponse, TokenUsage
 from lattice.commands.up import (
@@ -21,7 +19,6 @@ from lattice.heartbeat import SYSTEM_SENDER, Heartbeat
 from lattice.router.router import Router
 from lattice.session.models import StatusEvent
 from lattice.session.recorder import SessionRecorder
-
 
 # ------------------------------------------------------------------ #
 # Helpers

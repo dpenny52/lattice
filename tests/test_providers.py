@@ -161,7 +161,13 @@ class TestAnthropicProvider:
                 },
                 {"role": "user", "content": "thanks"},
             ],
-            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {},
+                }
+            ],
             model="claude-sonnet-4-5-20250929",
         )
 
@@ -170,7 +176,8 @@ class TestAnthropicProvider:
         assistant_msg = api_messages[1]
         assert assistant_msg["role"] == "assistant"
         assert isinstance(assistant_msg["content"], list)
-        assert assistant_msg["content"][0] == {"type": "text", "text": "I'll call the tool"}
+        expected = {"type": "text", "text": "I'll call the tool"}
+        assert assistant_msg["content"][0] == expected
         assert assistant_msg["content"][1] == {
             "type": "tool_use",
             "id": "call_1",
@@ -178,7 +185,9 @@ class TestAnthropicProvider:
             "input": {"city": "NYC"},
         }
 
-    async def test_translates_string_arguments(self, provider: AnthropicProvider) -> None:
+    async def test_translates_string_arguments(
+        self, provider: AnthropicProvider
+    ) -> None:
         """Tool call arguments as a JSON string are parsed to a dict."""
         text_block = MagicMock()
         text_block.type = "text"
@@ -208,9 +217,20 @@ class TestAnthropicProvider:
                         }
                     ],
                 },
-                {"role": "tool", "tool_call_id": "call_s", "name": "get_weather", "content": "72F"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_s",
+                    "name": "get_weather",
+                    "content": "72F",
+                },
             ],
-            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {},
+                }
+            ],
             model="claude-sonnet-4-5-20250929",
         )
 
@@ -243,7 +263,11 @@ class TestAnthropicProvider:
                     "role": "assistant",
                     "content": "",
                     "tool_calls": [
-                        {"id": "call_x", "name": "get_weather", "arguments": {"city": "LA"}},
+                        {
+                            "id": "call_x",
+                            "name": "get_weather",
+                            "arguments": {"city": "LA"},
+                        },
                     ],
                 },
                 {
@@ -253,7 +277,13 @@ class TestAnthropicProvider:
                     "content": "85F",
                 },
             ],
-            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {},
+                }
+            ],
             model="claude-sonnet-4-5-20250929",
         )
 
@@ -292,14 +322,38 @@ class TestAnthropicProvider:
                     "role": "assistant",
                     "content": "",
                     "tool_calls": [
-                        {"id": "c1", "name": "get_weather", "arguments": {"city": "NYC"}},
-                        {"id": "c2", "name": "get_weather", "arguments": {"city": "LA"}},
+                        {
+                            "id": "c1",
+                            "name": "get_weather",
+                            "arguments": {"city": "NYC"},
+                        },
+                        {
+                            "id": "c2",
+                            "name": "get_weather",
+                            "arguments": {"city": "LA"},
+                        },
                     ],
                 },
-                {"role": "tool", "tool_call_id": "c1", "name": "get_weather", "content": "72F"},
-                {"role": "tool", "tool_call_id": "c2", "name": "get_weather", "content": "85F"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "name": "get_weather",
+                    "content": "72F",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "c2",
+                    "name": "get_weather",
+                    "content": "85F",
+                },
             ],
-            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {},
+                }
+            ],
             model="claude-sonnet-4-5-20250929",
         )
 
@@ -335,17 +389,41 @@ class TestAnthropicProvider:
                 "role": "assistant",
                 "content": "Let me check both cities.",
                 "tool_calls": [
-                    {"id": "c1", "name": "get_weather", "arguments": {"city": "NYC"}},
-                    {"id": "c2", "name": "get_weather", "arguments": {"city": "LA"}},
+                    {
+                        "id": "c1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    },
+                    {
+                        "id": "c2",
+                        "name": "get_weather",
+                        "arguments": {"city": "LA"},
+                    },
                 ],
             },
-            {"role": "tool", "tool_call_id": "c1", "name": "get_weather", "content": "72F"},
-            {"role": "tool", "tool_call_id": "c2", "name": "get_weather", "content": "85F"},
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "name": "get_weather",
+                "content": "72F",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c2",
+                "name": "get_weather",
+                "content": "85F",
+            },
         ]
 
         result = await provider.chat(
             messages=messages,
-            tools=[{"name": "get_weather", "description": "Get weather", "input_schema": {}}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {},
+                }
+            ],
             model="claude-sonnet-4-5-20250929",
         )
 
@@ -354,7 +432,8 @@ class TestAnthropicProvider:
         assert call_kwargs["system"] == "You are a weather bot"
 
         api_messages = call_kwargs["messages"]
-        # user, assistant (with tool_use blocks), user (merged tool_results) = 3 messages
+        # user, assistant (with tool_use blocks),
+        # user (merged tool_results) = 3 messages
         assert len(api_messages) == 3
         assert api_messages[0] == {"role": "user", "content": "weather in NYC and LA?"}
 

@@ -45,7 +45,10 @@ class AgentMemoryLogger:
 
     def write(self, snapshot: dict[str, Any]) -> None:
         """Append a timestamped snapshot line to the JSONL file."""
-        snapshot["ts"] = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        ts = datetime.now(tz=UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%f"
+        )[:-3] + "Z"
+        snapshot["ts"] = ts
         with self._lock:
             if self._fh.closed:
                 return

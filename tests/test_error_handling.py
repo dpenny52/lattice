@@ -13,7 +13,6 @@ from lattice.agent.providers import (
     AnthropicProvider,
     GoogleProvider,
     OpenAIProvider,
-    create_provider,
 )
 from lattice.config.models import TopologyConfig
 from lattice.config.parser import ConfigError, load_config
@@ -62,7 +61,10 @@ class TestConfigErrorMessages:
     def test_missing_config_file(self, tmp_path: Path) -> None:
         """Missing lattice.yaml should suggest running lattice init."""
         os.chdir(tmp_path)
-        with pytest.raises(ConfigError, match="No lattice.yaml found. Run `lattice init` to create one."):
+        with pytest.raises(
+            ConfigError,
+            match="No lattice.yaml found. Run `lattice init` to create one.",
+        ):
             load_config(None)
 
     def test_invalid_yaml_syntax(self, tmp_path: Path) -> None:
@@ -210,7 +212,11 @@ class TestRateLimitErrors:
 
         # Verify rate limit message was shown with exact format
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
-        assert any("got a 429 from anthropic (rate limited)" in str(call).lower() for call in error_calls)
+        assert any(
+            "got a 429 from anthropic (rate limited)"
+            in str(call).lower()
+            for call in error_calls
+        )
 
     async def test_auth_error_shows_user_message(self, tmp_path: Path) -> None:
         """401 auth errors should show user-friendly message."""
@@ -248,7 +254,11 @@ class TestRateLimitErrors:
 
         # Verify auth error message was shown
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
-        assert any("got a 401 from openai (authentication failed)" in str(call).lower() for call in error_calls)
+        assert any(
+            "got a 401 from openai (authentication failed)"
+            in str(call).lower()
+            for call in error_calls
+        )
 
     async def test_server_error_shows_user_message(self, tmp_path: Path) -> None:
         """500 server errors should show user-friendly message with retry info."""
@@ -286,7 +296,11 @@ class TestRateLimitErrors:
 
         # Verify server error message was shown
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]
-        assert any("got a 500 from google (server error)" in str(call).lower() for call in error_calls)
+        assert any(
+            "got a 500 from google (server error)"
+            in str(call).lower()
+            for call in error_calls
+        )
 
 
 class TestNetworkErrors:
@@ -339,7 +353,6 @@ class TestErrorRecording:
         from lattice.agent.llm_agent import LLMAgent
         from lattice.agent.providers import LLMProvider
         from lattice.router.router import Router
-        from lattice.session.models import ErrorEvent
         from lattice.session.recorder import SessionRecorder
 
         recorder = SessionRecorder(team="test", config_hash="abc123")
@@ -379,7 +392,6 @@ class TestErrorRecording:
         """Script errors should be recorded as ErrorEvent."""
         from lattice.agent.script_bridge import ScriptBridge
         from lattice.router.router import Router
-        from lattice.session.models import ErrorEvent
         from lattice.session.recorder import SessionRecorder
 
         recorder = SessionRecorder(team="test", config_hash="abc123")

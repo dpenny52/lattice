@@ -13,9 +13,9 @@ from pydantic import ValidationError
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, VerticalScroll
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, Label, Static
+from textual.widgets import Header, Input, Label, Static
 
 from lattice.session.models import (
     AgentDoneEvent,
@@ -157,7 +157,10 @@ def _extract_metadata(file_path: Path, events: list[SessionEvent]) -> SessionMet
     # Prefer session_end tokens if present and non-zero, otherwise use accumulated
     total_tokens = accumulated_tokens
     if session_end_tokens is not None:
-        end_total = session_end_tokens.get("input", 0) + session_end_tokens.get("output", 0)
+        end_total = (
+            session_end_tokens.get("input", 0)
+            + session_end_tokens.get("output", 0)
+        )
         if end_total > 0:
             total_tokens = session_end_tokens
 
@@ -210,14 +213,21 @@ def _format_session_list(sessions: list[SessionMetadata]) -> None:
     click.echo(f"\n📊 Found {len(sessions)} session(s):\n")
 
     # Table header
-    header = f"{'SESSION ID':<14} {'TEAM':<20} {'START':<20} {'DURATION':<12} {'MESSAGES':<10} {'TOKENS':<12}"
+    header = (
+        f"{'SESSION ID':<14} {'TEAM':<20} {'START':<20} "
+        f"{'DURATION':<12} {'MESSAGES':<10} {'TOKENS':<12}"
+    )
     click.echo(header)
     click.echo("─" * len(header))
 
     # Table rows
     for session in sessions:
         start_str = session.start_ts.strftime("%Y-%m-%d %H:%M:%S")
-        tokens_str = f"{session.total_tokens['input'] + session.total_tokens['output']:,}"
+        total = (
+            session.total_tokens['input']
+            + session.total_tokens['output']
+        )
+        tokens_str = f"{total:,}"
         status_marker = "✓" if session.is_complete else "⋯"
 
         row = (
@@ -244,12 +254,12 @@ def _format_session_detail(data: SessionData) -> None:
         click.echo(f"   Ended: {meta.end_ts.strftime('%Y-%m-%d %H:%M:%S')}")
     click.echo(f"   Duration: {meta.duration_str}")
     click.echo(f"   Status: {'Complete ✓' if meta.is_complete else 'In Progress ⋯'}")
-    click.echo(f"\n📊 Statistics:")
+    click.echo("\n📊 Statistics:")
     click.echo(f"   Events: {meta.event_count:,}")
     click.echo(f"   Messages: {meta.message_count:,}")
-    click.echo(
-        f"   Tokens: {meta.total_tokens['input']:,} in / {meta.total_tokens['output']:,} out"
-    )
+    tok_in = meta.total_tokens['input']
+    tok_out = meta.total_tokens['output']
+    click.echo(f"   Tokens: {tok_in:,} in / {tok_out:,} out")
     click.echo(f"\n👥 Agents ({len(meta.agents)}):")
     for agent in sorted(meta.agents):
         click.echo(f"   • {agent}")
@@ -282,12 +292,19 @@ class SessionMetadataPanel(Static):
 
         meta = self.metadata
         yield Label(f"[bold]Session:[/bold] {meta.session_id}", markup=True)
-        yield Label(f"[bold]Team:[/bold] {meta.team} | [bold]Duration:[/bold] {meta.duration_str}", markup=True)
-        yield Label(
-            f"[bold]Events:[/bold] {meta.event_count:,} | [bold]Messages:[/bold] {meta.message_count:,} | "
-            f"[bold]Tokens:[/bold] {meta.total_tokens['input']:,}i / {meta.total_tokens['output']:,}o",
-            markup=True,
+        team_dur = (
+            f"[bold]Team:[/bold] {meta.team}"
+            f" | [bold]Duration:[/bold] {meta.duration_str}"
         )
+        yield Label(team_dur, markup=True)
+        tok_in = meta.total_tokens['input']
+        tok_out = meta.total_tokens['output']
+        stats = (
+            f"[bold]Events:[/bold] {meta.event_count:,}"
+            f" | [bold]Messages:[/bold] {meta.message_count:,}"
+            f" | [bold]Tokens:[/bold] {tok_in:,}i / {tok_out:,}o"
+        )
+        yield Label(stats, markup=True)
         agents_str = ", ".join(sorted(meta.agents))
         yield Label(f"[bold]Agents:[/bold] {agents_str}", markup=True)
 
@@ -313,7 +330,8 @@ class EventDetailPanel(VerticalScroll):
 
         # Header: seq, timestamp, type
         yield Label(
-            f"[bold cyan]Event #{event.seq:04d}[/bold cyan] | {event.ts} | [yellow]{event.type}[/yellow]",
+            f"[bold cyan]Event #{event.seq:04d}[/bold cyan]"
+            f" | {event.ts} | [yellow]{event.type}[/yellow]",
             markup=True,
         )
         yield Label("")  # Blank line
@@ -328,12 +346,18 @@ class EventDetailPanel(VerticalScroll):
             yield Label(f"[bold]Reason:[/bold] {event.reason}", markup=True)
             yield Label(f"[bold]Duration:[/bold] {event.duration_ms:,}ms", markup=True)
             yield Label(
-                f"[bold]Total Tokens:[/bold] {event.total_tokens['input']:,}i / {event.total_tokens['output']:,}o",
+                f"[bold]Total Tokens:[/bold] "
+                f"{event.total_tokens['input']:,}i"
+                f" / {event.total_tokens['output']:,}o",
                 markup=True,
             )
 
         elif isinstance(event, MessageEvent):
-            yield Label(f"[bold]From:[/bold] {event.from_agent} → [bold]To:[/bold] {event.to}", markup=True)
+            from_to = (
+                f"[bold]From:[/bold] {event.from_agent}"
+                f" → [bold]To:[/bold] {event.to}"
+            )
+            yield Label(from_to, markup=True)
             yield Label("[bold]Content:[/bold]", markup=True)
             # Render message content with word wrapping
             for line in event.content.split("\n"):
@@ -342,14 +366,20 @@ class EventDetailPanel(VerticalScroll):
         elif isinstance(event, LLMCallStartEvent):
             yield Label(f"[bold]Agent:[/bold] {event.agent}", markup=True)
             yield Label(f"[bold]Model:[/bold] {event.model}", markup=True)
-            yield Label(f"[bold]Messages Count:[/bold] {event.messages_count}", markup=True)
+            yield Label(
+                f"[bold]Messages Count:[/bold] "
+                f"{event.messages_count}",
+                markup=True,
+            )
 
         elif isinstance(event, LLMCallEndEvent):
             yield Label(f"[bold]Agent:[/bold] {event.agent}", markup=True)
             yield Label(f"[bold]Model:[/bold] {event.model}", markup=True)
             yield Label(f"[bold]Duration:[/bold] {event.duration_ms:,}ms", markup=True)
             yield Label(
-                f"[bold]Tokens:[/bold] {event.tokens['input']:,}i / {event.tokens['output']:,}o",
+                f"[bold]Tokens:[/bold] "
+                f"{event.tokens['input']:,}i"
+                f" / {event.tokens['output']:,}o",
                 markup=True,
             )
 
@@ -365,13 +395,21 @@ class EventDetailPanel(VerticalScroll):
             yield Label(f"[bold]Agent:[/bold] {event.agent}", markup=True)
             yield Label(f"[bold]Tool:[/bold] {event.tool}", markup=True)
             yield Label(f"[bold]Duration:[/bold] {event.duration_ms:,}ms", markup=True)
-            yield Label(f"[bold]Result Size:[/bold] {event.result_size:,} bytes", markup=True)
+            yield Label(
+                f"[bold]Result Size:[/bold] "
+                f"{event.result_size:,} bytes",
+                markup=True,
+            )
 
             # If verbose mode and we have the full result, display it
             if event.seq in self.verbose_data:
                 yield Label("")
                 yield Label("[bold]Full Result:[/bold]", markup=True)
-                result_json = json.dumps(self.verbose_data[event.seq], indent=2, default=str)
+                result_json = json.dumps(
+                    self.verbose_data[event.seq],
+                    indent=2,
+                    default=str,
+                )
                 # Limit to first 100 lines
                 lines = result_json.split("\n")
                 for line in lines[:100]:
@@ -602,7 +640,10 @@ class ReplayApp(App[None]):
 
     def action_filter_type(self) -> None:
         """Prompt for an event type filter."""
-        self._show_input_dialog("type", "Filter by event type (e.g., message, tool_call)...")
+        self._show_input_dialog(
+            "type",
+            "Filter by event type (e.g., message, tool_call)...",
+        )
 
     def action_clear_filter(self) -> None:
         """Clear any active filters."""
@@ -665,12 +706,18 @@ class ReplayApp(App[None]):
                 searchable_text = f"{event.from_agent} {event.to} {event.content}"
             elif isinstance(event, (ToolCallEvent, CLIToolCallEvent)):
                 searchable_text = f"{event.agent} {event.tool} {json.dumps(event.args)}"
-            elif isinstance(event, (ToolResultEvent, StatusEvent, ErrorEvent, AgentStartEvent, AgentDoneEvent)):
+            elif isinstance(event, (
+                ToolResultEvent, StatusEvent, ErrorEvent,
+                AgentStartEvent, AgentDoneEvent,
+            )):
                 searchable_text = f"{event.agent}"
             elif isinstance(event, (LLMCallStartEvent, LLMCallEndEvent)):
                 searchable_text = f"{event.agent} {event.model}"
             elif isinstance(event, (CLITextChunkEvent, CLIThinkingEvent)):
-                searchable_text = f"{event.agent} {getattr(event, 'text', getattr(event, 'content', ''))}"
+                text_val = getattr(
+                    event, 'text', getattr(event, 'content', ''),
+                )
+                searchable_text = f"{event.agent} {text_val}"
             elif isinstance(event, CLIProgressEvent):
                 searchable_text = f"{event.agent} {event.status}"
 
@@ -692,16 +739,23 @@ class ReplayApp(App[None]):
 
         for event in self.all_events:
             event_agent = getattr(event, "agent", None)
-            if event_agent and event_agent == agent_name:
+            if (
+                (event_agent and event_agent == agent_name)
+                or (
+                    isinstance(event, MessageEvent)
+                    and (
+                        event.from_agent == agent_name
+                        or event.to == agent_name
+                    )
+                )
+            ):
                 self.filtered_events.append(event)
-            elif isinstance(event, MessageEvent):
-                if event.from_agent == agent_name or event.to == agent_name:
-                    self.filtered_events.append(event)
 
         self.active_filter = f"agent: {agent_name}"
         self.current_index = 0
         self._update_event_display()
-        self.notify(f"Found {len(self.filtered_events)} events for agent '{agent_name}'")
+        count = len(self.filtered_events)
+        self.notify(f"Found {count} events for agent '{agent_name}'")
 
     def _handle_type_filter(self, event_type: str) -> None:
         """Filter events by event type."""
@@ -757,7 +811,11 @@ def _load_verbose_data(session_file: Path) -> dict[int, Any]:
     default="sessions",
     help="Directory containing session files (default: ./sessions)",
 )
-@click.option("-v", "--verbose", is_flag=True, help="Load full tool results from verbose sidecar.")
+@click.option(
+    "-v", "--verbose",
+    is_flag=True,
+    help="Load full tool results from verbose sidecar.",
+)
 def replay(session_id: str | None, sessions_dir: Path, verbose: bool) -> None:
     """Replay a recorded session.
 
@@ -778,12 +836,15 @@ def replay(session_id: str | None, sessions_dir: Path, verbose: bool) -> None:
 
     if not matching_files:
         click.echo(f"❌ Session not found: {session_id}", err=True)
-        click.echo(f"\nTip: Run 'lattice replay' to list all available sessions.", err=True)
+        click.echo(
+            "\nTip: Run 'lattice replay' to list all available sessions.",
+            err=True,
+        )
         raise SystemExit(1)
 
     if len(matching_files) > 1:
         click.echo(f"❌ Ambiguous session ID: {session_id}", err=True)
-        click.echo(f"   Matches multiple files:", err=True)
+        click.echo("   Matches multiple files:", err=True)
         for f in matching_files:
             click.echo(f"     • {f.name}", err=True)
         raise SystemExit(1)

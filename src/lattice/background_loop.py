@@ -7,6 +7,7 @@ Provides a shutdown-aware sleep loop and managed task lifecycle
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 logger = logging.getLogger(__name__)
@@ -42,10 +43,8 @@ class BackgroundLoop:
         """Cancel the background task and wait for cleanup."""
         if self._task is not None and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
     # ------------------------------------------------------------------ #

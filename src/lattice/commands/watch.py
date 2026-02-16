@@ -13,30 +13,11 @@ from typing import Any
 import click
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, Label, Static
+from textual.widgets import Header, Input, Label, Static
 
 from lattice.constants import SYSTEM_SENDER
-from lattice.session.models import (
-    AgentDoneEvent,
-    AgentResponseEvent,
-    AgentStartEvent,
-    CLIProgressEvent,
-    CLITextChunkEvent,
-    CLIThinkingEvent,
-    CLIToolCallEvent,
-    ErrorEvent,
-    LLMCallEndEvent,
-    LoopBoundaryEvent,
-    MessageEvent,
-    SessionEndEvent,
-    SessionEvent,
-    SessionStartEvent,
-    StatusEvent,
-    ToolCallEvent,
-)
-
 
 # ------------------------------------------------------------------ #
 # Data models
@@ -69,7 +50,9 @@ class SessionStats:
 
     start_time: datetime | None = None
     message_count: int = 0
-    total_tokens: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0})
+    total_tokens: dict[str, int] = field(
+        default_factory=lambda: {"input": 0, "output": 0}
+    )
     loop_iteration: int = 0
     session_ended: bool = False
 
@@ -482,7 +465,9 @@ class WatchApp(App[None]):
         elif event_type == "llm_call_start":
             agent_name = event_dict["agent"]
             if agent_name in self.agents:
-                self.agents[agent_name].current_activity = f"calling {event_dict['model']}"
+                self.agents[agent_name].current_activity = (
+                    f"calling {event_dict['model']}"
+                )
 
         elif event_type == "llm_call_end":
             agent_name = event_dict["agent"]
@@ -495,7 +480,9 @@ class WatchApp(App[None]):
 
             duration_ms = event_dict["duration_ms"]
             self._add_event_line(
-                f"[magenta]LLM call[/magenta]: {agent_name} ({duration_ms}ms, {tokens['input']}i/{tokens['output']}o)"
+                f"[magenta]LLM call[/magenta]: {agent_name}"
+                f" ({duration_ms}ms,"
+                f" {tokens['input']}i/{tokens['output']}o)"
             )
 
         elif event_type == "tool_call":
@@ -524,7 +511,8 @@ class WatchApp(App[None]):
 
             if self.show_tools:
                 self._add_event_line(
-                    f"[cyan]Tool result[/cyan]: {agent_name}.{tool_name} ({duration_ms}ms)"
+                    f"[cyan]Tool result[/cyan]: "
+                    f"{agent_name}.{tool_name} ({duration_ms}ms)"
                 )
 
         elif event_type == "status":

@@ -26,12 +26,12 @@ def _exit_watchdog() -> None:
 
 atexit.register(_exit_watchdog)
 
-from lattice import __version__
-from lattice.commands.down import down
-from lattice.commands.init import init
-from lattice.commands.replay import replay
-from lattice.commands.up import up
-from lattice.commands.watch import watch
+from lattice import __version__  # noqa: E402
+from lattice.commands.down import down  # noqa: E402
+from lattice.commands.init import init  # noqa: E402
+from lattice.commands.replay import replay  # noqa: E402
+from lattice.commands.up import up  # noqa: E402
+from lattice.commands.watch import watch  # noqa: E402
 
 
 @click.group()

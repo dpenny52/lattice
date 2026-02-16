@@ -68,8 +68,9 @@ class RateLimitGate:
         self._resume_at = max(
             self._resume_at, time.monotonic() + self._pause_seconds,
         )
+        pause_secs = int(self._pause_seconds)
         click.echo(
-            f"⚠️  Rate limit hit — pausing all LLM calls for {int(self._pause_seconds)}s...",
+            f"⚠️  Rate limit hit — pausing all LLM calls for {pause_secs}s...",
             err=True,
         )
         logger.warning(
@@ -238,7 +239,10 @@ class LLMAgent:
                         try:
                             await self._on_response(response.content)
                         except Exception:
-                            logger.exception("%s: on_response callback failed", self.name)
+                            logger.exception(
+                                "%s: on_response callback failed",
+                                self.name,
+                            )
                 return
 
             # Build assistant message with tool calls for the thread.
@@ -316,28 +320,73 @@ class LLMAgent:
                 safe_error = _sanitize_error(exc)
 
                 # Generate user-friendly error message
-                provider = self._model.split("/")[0] if "/" in self._model else "provider"
+                provider = (
+                    self._model.split("/")[0]
+                    if "/" in self._model
+                    else "provider"
+                )
                 if self._is_rate_limit_error(exc):
+                    pause = int(_RATE_LIMIT_PAUSE)
                     if retrying:
-                        user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited). Retrying in {int(_RATE_LIMIT_PAUSE)}s..."
+                        user_msg = (
+                            f"Agent '{self.name}' got a 429"
+                            f" from {provider} (rate limited)."
+                            f" Retrying in {pause}s..."
+                        )
                     else:
-                        user_msg = f"Agent '{self.name}' got a 429 from {provider} (rate limited)."
+                        user_msg = (
+                            f"Agent '{self.name}' got a 429"
+                            f" from {provider} (rate limited)."
+                        )
                     click.echo(user_msg, err=True)
-                elif "401" in safe_error or "unauthorized" in safe_error.lower() or "api key" in safe_error.lower() or "authentication" in safe_error.lower():
-                    click.echo(f"Agent '{self.name}' got a 401 from {provider} (authentication failed). Check your API key.", err=True)
-                elif "500" in safe_error or "internal server" in safe_error.lower() or "service unavailable" in safe_error.lower():
+                elif (
+                    "401" in safe_error
+                    or "unauthorized" in safe_error.lower()
+                    or "api key" in safe_error.lower()
+                    or "authentication" in safe_error.lower()
+                ):
+                    msg_401 = (
+                        f"Agent '{self.name}' got a 401"
+                        f" from {provider} (authentication"
+                        " failed). Check your API key."
+                    )
+                    click.echo(msg_401, err=True)
+                elif (
+                    "500" in safe_error
+                    or "internal server" in safe_error.lower()
+                    or "service unavailable" in safe_error.lower()
+                ):
                     if retrying:
                         delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg = f"Agent '{self.name}' got a 500 from {provider} (server error). Retrying in {delay:.0f}s..."
+                        user_msg = (
+                            f"Agent '{self.name}' got a 500"
+                            f" from {provider} (server error)."
+                            f" Retrying in {delay:.0f}s..."
+                        )
                     else:
-                        user_msg = f"Agent '{self.name}' got a 500 from {provider} (server error)."
+                        user_msg = (
+                            f"Agent '{self.name}' got a 500"
+                            f" from {provider} (server error)."
+                        )
                     click.echo(user_msg, err=True)
-                elif "connection" in safe_error.lower() or "network" in safe_error.lower() or "timeout" in safe_error.lower() or "dns" in safe_error.lower():
+                elif (
+                    "connection" in safe_error.lower()
+                    or "network" in safe_error.lower()
+                    or "timeout" in safe_error.lower()
+                    or "dns" in safe_error.lower()
+                ):
                     if retrying:
                         delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg = f"Agent '{self.name}' — network error: {safe_error}. Retrying in {delay:.0f}s..."
+                        user_msg = (
+                            f"Agent '{self.name}'"
+                            f" — network error: {safe_error}."
+                            f" Retrying in {delay:.0f}s..."
+                        )
                     else:
-                        user_msg = f"Agent '{self.name}' — network error: {safe_error}"
+                        user_msg = (
+                            f"Agent '{self.name}'"
+                            f" — network error: {safe_error}"
+                        )
                     click.echo(user_msg, err=True)
                 else:
                     user_msg = f"Agent '{self.name}' — LLM call failed: {safe_error}"

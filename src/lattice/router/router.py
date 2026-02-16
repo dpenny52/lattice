@@ -94,7 +94,12 @@ class Router:
 
         # "user" and "__system__" bypass topology — god mode.
         # Sends TO "user" also bypass — "user" isn't in the topology graph.
-        if not self._is_route_bypassed(from_agent, to_agent) and not self._topology.is_allowed(from_agent, to_agent):
+        if (
+            not self._is_route_bypassed(from_agent, to_agent)
+            and not self._topology.is_allowed(
+                from_agent, to_agent
+            )
+        ):
             msg = f"Route from '{from_agent}' to '{to_agent}' is not allowed"
             raise RouteNotAllowedError(msg)
 

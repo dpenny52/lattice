@@ -939,7 +939,9 @@ class TestMessageQueuing:
         mock_proc_1.wait = AsyncMock(return_value=0)
 
         # Second subprocess responds normally.
-        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="second response")
+        mock_proc_2, stdout_2 = _make_mock_claude_process(
+            text_response="second response",
+        )
 
         call_count = 0
 
@@ -951,7 +953,11 @@ class TestMessageQueuing:
                 return mock_proc_1
             return mock_proc_2
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
             # Start first message.
             task_1 = asyncio.create_task(
                 bridge.handle_message("user", "first task")
@@ -1006,12 +1012,20 @@ class TestMessageQueuing:
         async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            proc, stdout = _make_mock_claude_process(text_response=f"response {call_count}")
-            # Close stdout immediately so readline() hits EOF after the pre-fed line.
+            resp = f"response {call_count}"
+            proc, stdout = _make_mock_claude_process(
+                text_response=resp,
+            )
+            # Close stdout immediately so readline() hits EOF
+            # after the pre-fed line.
             stdout.close()
             return proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
             # Send 4 messages rapidly.
             tasks = [
                 asyncio.create_task(bridge.handle_message("user", f"task {i}"))
@@ -1022,8 +1036,14 @@ class TestMessageQueuing:
             await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
 
         # Responses should appear in order.
-        response_texts = [c for c in captured if c.startswith("response")]
-        assert response_texts == ["response 1", "response 2", "response 3", "response 4"]
+        response_texts = [
+            c for c in captured if c.startswith("response")
+        ]
+        expected = [
+            "response 1", "response 2",
+            "response 3", "response 4",
+        ]
+        assert response_texts == expected
         recorder.close()
 
     async def test_continue_flag_used_for_followups(self, tmp_path: Path) -> None:
@@ -1057,13 +1077,23 @@ class TestMessageQueuing:
                 return mock_proc_1
             return mock_proc_2
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
             # First message.
-            task_1 = asyncio.create_task(bridge.handle_message("user", "first"))
-            await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
+            task_1 = asyncio.create_task(
+                bridge.handle_message("user", "first"),
+            )
+            await asyncio.wait_for(
+                first_task_started.wait(), timeout=2.0,
+            )
 
-            # Second message (queues — agent is busy).
-            task_2 = asyncio.create_task(bridge.handle_message("user", "second"))
+            # Second message (queues -- agent is busy).
+            task_2 = asyncio.create_task(
+                bridge.handle_message("user", "second"),
+            )
             await asyncio.wait_for(task_2, timeout=2.0)
 
             # Let first task complete with session_id (from system init).
@@ -1101,10 +1131,18 @@ class TestMessageQueuing:
             on_response=_async_capture(captured),
         )
 
-        mock_proc, stdout = _make_mock_claude_process(text_response="immediate response")
+        mock_proc, stdout = _make_mock_claude_process(
+            text_response="immediate response",
+        )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            task = asyncio.create_task(bridge.handle_message("user", "task"))
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        )
+        with patch_exec:
+            task = asyncio.create_task(
+                bridge.handle_message("user", "task"),
+            )
             await asyncio.sleep(0.01)
             stdout.close()
             await asyncio.wait_for(task, timeout=2.0)
@@ -1148,11 +1186,21 @@ class TestMessageQueuing:
                 return mock_proc_1
             return mock_proc_2
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
-            task_1 = asyncio.create_task(bridge.handle_message("user", "t1"))
-            await asyncio.wait_for(first_task_started.wait(), timeout=2.0)
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
+            task_1 = asyncio.create_task(
+                bridge.handle_message("user", "t1"),
+            )
+            await asyncio.wait_for(
+                first_task_started.wait(), timeout=2.0,
+            )
 
-            task_2 = asyncio.create_task(bridge.handle_message("user", "t2"))
+            task_2 = asyncio.create_task(
+                bridge.handle_message("user", "t2"),
+            )
             await asyncio.wait_for(task_2, timeout=2.0)
 
             # Verify busy feedback before first task completes.
@@ -1181,22 +1229,34 @@ class TestMessageQueuing:
         )
 
         # First task fails.
-        mock_proc_1, stdout_1 = _make_mock_claude_process(text_response="", returncode=1)
-        mock_proc_1.stderr.read = AsyncMock(return_value=b"error")
+        mock_proc_1, stdout_1 = _make_mock_claude_process(
+            text_response="", returncode=1,
+        )
+        mock_proc_1.stderr.read = AsyncMock(
+            return_value=b"error",
+        )
 
         # Second task succeeds.
-        mock_proc_2, stdout_2 = _make_mock_claude_process(text_response="success")
+        mock_proc_2, stdout_2 = _make_mock_claude_process(
+            text_response="success",
+        )
 
         call_count = 0
 
-        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+        async def mock_create_subprocess(
+            *args: Any, **kwargs: Any,
+        ) -> MagicMock:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 return mock_proc_1
             return mock_proc_2
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
             task_1 = asyncio.create_task(bridge.handle_message("user", "fail"))
             await asyncio.sleep(0.01)
             stdout_1.close()
@@ -1227,14 +1287,24 @@ class TestMessageQueuing:
         async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            proc, stdout = _make_mock_claude_process(text_response=f"task-{call_count}")
-            # Close immediately so readline() hits EOF after the pre-fed line.
+            resp = f"task-{call_count}"
+            proc, stdout = _make_mock_claude_process(
+                text_response=resp,
+            )
+            # Close immediately so readline() hits EOF
+            # after the pre-fed line.
             stdout.close()
             return proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
             tasks = [
-                asyncio.create_task(bridge.handle_message("user", f"msg-{i+1}"))
+                asyncio.create_task(
+                    bridge.handle_message("user", f"msg-{i+1}"),
+                )
                 for i in range(num_tasks)
             ]
 
@@ -1520,9 +1590,15 @@ class TestClaudeStreaming:
             task = asyncio.create_task(bridge.handle_message("user", "work"))
             await asyncio.sleep(0.01)
 
-            # Feed system init event (real Claude CLI format — status comes from system init).
+            # Feed system init event (real Claude CLI format
+            # -- status comes from system init).
+            init_event = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "test-123",
+            }
             stdout.feed(
-                json.dumps({"type": "system", "subtype": "init", "session_id": "test-123"}).encode() + b"\n"
+                json.dumps(init_event).encode() + b"\n"
             )
             stdout.close()
 
@@ -1587,9 +1663,15 @@ class TestClaudeStreaming:
             task = asyncio.create_task(bridge.handle_message("user", "first"))
             await asyncio.sleep(0.01)
 
-            # System init event carries the session_id (used for --continue).
+            # System init event carries the session_id
+            # (used for --continue).
+            init_event = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "conv-xyz789",
+            }
             stdout.feed(
-                json.dumps({"type": "system", "subtype": "init", "session_id": "conv-xyz789"}).encode() + b"\n"
+                json.dumps(init_event).encode() + b"\n"
             )
             stdout.close()
 
@@ -1598,7 +1680,9 @@ class TestClaudeStreaming:
         assert bridge._claude_conversation_id == "conv-xyz789"
         recorder.close()
 
-    async def test_stream_events_bracketed_by_agent_start_done(self, tmp_path: Path) -> None:
+    async def test_stream_events_bracketed_by_agent_start_done(
+        self, tmp_path: Path,
+    ) -> None:
         """Streaming events are bracketed by AgentStartEvent and AgentDoneEvent."""
         router, recorder = _make_router(tmp_path)
         bridge = _make_bridge(router, recorder, cli_type="claude")
@@ -1626,9 +1710,18 @@ class TestClaudeStreaming:
             await asyncio.wait_for(task, timeout=2.0)
 
         # Find the bracketing events.
-        start_idx = next(i for i, e in enumerate(events) if isinstance(e, AgentStartEvent))
-        done_idx = next(i for i, e in enumerate(events) if isinstance(e, AgentDoneEvent))
-        text_idx = next(i for i, e in enumerate(events) if isinstance(e, CLITextChunkEvent))
+        start_idx = next(
+            i for i, e in enumerate(events)
+            if isinstance(e, AgentStartEvent)
+        )
+        done_idx = next(
+            i for i, e in enumerate(events)
+            if isinstance(e, AgentDoneEvent)
+        )
+        text_idx = next(
+            i for i, e in enumerate(events)
+            if isinstance(e, CLITextChunkEvent)
+        )
 
         # Text event should be between start and done.
         assert start_idx < text_idx < done_idx
@@ -1648,7 +1741,11 @@ class TestClaudeStreaming:
         mock_proc.stderr.read = AsyncMock(return_value=b"")
         mock_proc.wait = AsyncMock(return_value=0)
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        )
+        with patch_exec as mock_exec:
             task = asyncio.create_task(bridge.handle_message("user", "test"))
             await asyncio.sleep(0.01)
             stdout.close()
@@ -1716,7 +1813,11 @@ class TestClaudeMemoryGate:
         """Agent should refuse to spawn and record an error when memory is low."""
         router, recorder = _make_router(tmp_path)
         captured: list[str] = []
-        bridge = _make_bridge(router, recorder, cli_type="claude", on_response=_async_capture(captured))
+        bridge = _make_bridge(
+            router, recorder,
+            cli_type="claude",
+            on_response=_async_capture(captured),
+        )
         bridge._started = True
         events = _capture_events(recorder)
 
@@ -1745,8 +1846,15 @@ class TestClaudeMemoryGate:
         stdout.close()
 
         with (
-            patch("lattice.memory_monitor.get_available_mb", return_value=None),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc),
+            patch(
+                "lattice.memory_monitor.get_available_mb",
+                return_value=None,
+            ),
+            patch(
+                "asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=proc,
+            ),
         ):
             await bridge._handle_claude_task("user", "do stuff")
 
@@ -1763,8 +1871,15 @@ class TestClaudeMemoryGate:
         stdout.close()
 
         with (
-            patch("lattice.memory_monitor.get_available_mb", return_value=2048.0),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc),
+            patch(
+                "lattice.memory_monitor.get_available_mb",
+                return_value=2048.0,
+            ),
+            patch(
+                "asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=proc,
+            ),
         ):
             await bridge._handle_claude_task("user", "do stuff")
 

@@ -106,12 +106,10 @@ def _install_siginfo_handlers(
                     _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore[union-attr]
                     _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore[union-attr]
                     _signal_sender_info["code"] = info.contents.si_code  # type: ignore[union-attr]
-                try:
+                with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(
                         shutdown_callback, signal.Signals(sv).name,
                     )
-                except RuntimeError:
-                    pass  # loop already closed
             return _HandlerFunc(_handler)
 
         cfunc = _make(sig_value)
@@ -156,7 +154,10 @@ class UserAgent:
 @click.option(
     "-f", "--file", "config_file", type=click.Path(), help="Config file path."
 )
-@click.option("--watch", "enable_watch", is_flag=True, help="Enable live TUI with input bar.")
+@click.option(
+    "--watch", "enable_watch", is_flag=True,
+    help="Enable live TUI with input bar.",
+)
 @click.option(
     "--loop",
     "loop_iterations",
@@ -164,7 +165,8 @@ class UserAgent:
     default=None,
     is_flag=False,
     flag_value=-1,
-    help="Re-run prompt in a loop. Optional: specify max iterations (omit for infinite).",
+    help="Re-run prompt in a loop. Optional: specify max "
+    "iterations (omit for infinite).",
 )
 @click.option(
     "-p", "--prompt", "initial_prompt", type=str, default=None,
@@ -185,7 +187,12 @@ def up(
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc
 
-    asyncio.run(_run_session(config, verbose, loop_iterations, enable_watch, initial_prompt))
+    asyncio.run(
+        _run_session(
+            config, verbose, loop_iterations,
+            enable_watch, initial_prompt,
+        )
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -593,10 +600,8 @@ async def _watch_mode(
         app.exit()
 
     # Wait for app to finish
-    try:
+    with contextlib.suppress(Exception):
         await app_task
-    except Exception:
-        pass
 
     # If we got here because shutdown_event was set externally (Ctrl+C / SIGTERM)
     # rather than via /done or heartbeat completion, mark as ctrl_c.
@@ -606,7 +611,7 @@ async def _watch_mode(
     return reason
 
 
-async def _run_tui_app(app: "WatchApp") -> None:  # type: ignore[name-defined]
+async def _run_tui_app(app: WatchApp) -> None:  # type: ignore[name-defined]  # noqa: F821
     """Run the Textual app in async context."""
     await app.run_async()
 
@@ -838,14 +843,13 @@ async def _loop_mode(
                 break
 
             # Wait for tasks to complete, checking periodically
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
-                    asyncio.gather(*pending, return_exceptions=True),
+                    asyncio.gather(
+                        *pending, return_exceptions=True
+                    ),
                     timeout=0.5,
                 )
-            except TimeoutError:
-                # Timeout just means we'll check again
-                pass
 
         # Log loop boundary end
         recorder.record(

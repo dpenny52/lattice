@@ -10,7 +10,6 @@ from click.testing import CliRunner
 
 from lattice.commands.replay import (
     ReplayApp,
-    SessionData,
     SessionMetadata,
     _extract_metadata,
     _list_sessions,
@@ -21,15 +20,11 @@ from lattice.commands.replay import (
 )
 from lattice.session.models import (
     AgentStartEvent,
-    CLITextChunkEvent,
     LLMCallEndEvent,
-    LLMCallStartEvent,
     MessageEvent,
     SessionEndEvent,
     SessionStartEvent,
-    ToolCallEvent,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -493,7 +488,9 @@ class TestReplayCLI:
         assert result.exit_code == 0
         assert "No sessions found" in result.output
 
-    def test_load_specific_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_load_specific_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         # Create a test session
         session_file = tmp_path / "2026-02-14_team_xyz789.jsonl"
         _write_session_file(session_file, _minimal_session("xyz789", "test-team"))
@@ -524,8 +521,14 @@ class TestReplayCLI:
 
     def test_ambiguous_session_id(self, tmp_path: Path) -> None:
         # Create two sessions with overlapping IDs
-        _write_session_file(tmp_path / "2026-02-14_team_abc123.jsonl", _minimal_session("abc123", "t"))
-        _write_session_file(tmp_path / "2026-02-14_team_abc456.jsonl", _minimal_session("abc456", "t"))
+        _write_session_file(
+            tmp_path / "2026-02-14_team_abc123.jsonl",
+            _minimal_session("abc123", "t"),
+        )
+        _write_session_file(
+            tmp_path / "2026-02-14_team_abc456.jsonl",
+            _minimal_session("abc456", "t"),
+        )
 
         runner = CliRunner()
         result = runner.invoke(replay, ["abc", "--sessions-dir", str(tmp_path)])
@@ -534,7 +537,9 @@ class TestReplayCLI:
         assert result.exit_code == 1
         assert "Ambiguous" in result.output
 
-    def test_verbose_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_verbose_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         session_file = tmp_path / "2026-02-14_team_test123.jsonl"
         _write_session_file(session_file, _minimal_session("test123", "test-team"))
 
@@ -545,7 +550,10 @@ class TestReplayCLI:
         monkeypatch.setattr(ReplayApp, "run", mock_run)
 
         runner = CliRunner()
-        result = runner.invoke(replay, ["test123", "--sessions-dir", str(tmp_path), "-v"])
+        result = runner.invoke(
+            replay,
+            ["test123", "--sessions-dir", str(tmp_path), "-v"],
+        )
 
         assert result.exit_code == 0
         assert "Loading session from" in result.output
@@ -571,7 +579,10 @@ class TestLoadVerboseData:
 
         # Write verbose entries
         with verbose_file.open("w", encoding="utf-8") as fh:
-            fh.write(json.dumps({"seq": 1, "full_result": {"status": "ok", "data": "test"}}) + "\n")
+            fh.write(json.dumps({
+                "seq": 1,
+                "full_result": {"status": "ok", "data": "test"},
+            }) + "\n")
             fh.write(json.dumps({"seq": 3, "full_result": {"error": "failed"}}) + "\n")
 
         data = _load_verbose_data(session_file)

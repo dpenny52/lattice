@@ -14,7 +14,7 @@ import click
 
 from lattice.agent.helpers import format_stderr_preview, record_error
 from lattice.router.router import Router
-from lattice.session.models import AgentDoneEvent, AgentStartEvent, ErrorEvent
+from lattice.session.models import AgentDoneEvent, AgentStartEvent
 from lattice.session.recorder import SessionRecorder
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,11 @@ class ScriptBridge:
             self._record_error(f"Command not found: {args[0]}")
             return
         except OSError as exc:
-            click.echo(f"Agent '{self.name}' — failed to spawn subprocess: {exc}", err=True)
+            click.echo(
+                f"Agent '{self.name}' — failed to spawn"
+                f" subprocess: {exc}",
+                err=True,
+            )
             self._record_error(f"Failed to spawn subprocess: {exc}")
             return
 
@@ -144,7 +148,11 @@ class ScriptBridge:
                 click.echo(error_msg, err=True)
 
             # Record with truncated stderr in session log
-            full_error = f"Script exited with code {proc.returncode}: {stderr_text[:_MAX_STDERR_CHARS]}"
+            stderr_snippet = stderr_text[:_MAX_STDERR_CHARS]
+            full_error = (
+                f"Script exited with code {proc.returncode}:"
+                f" {stderr_snippet}"
+            )
             self._record_error(full_error)
             return
 

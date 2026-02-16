@@ -209,16 +209,24 @@ class CLIBridge:
                 if self._claude_busy:
                     # Check if queue has space before adding.
                     if self._message_queue.full():
-                        error_msg = f"Message queue full (100 messages) — rejecting message from {from_agent}"
-                        record_error(self._recorder, self.name, error_msg, logger=logger)
+                        error_msg = (
+                            "Message queue full (100 messages)"
+                            f" — rejecting message from {from_agent}"
+                        )
+                        record_error(
+                            self._recorder, self.name,
+                            error_msg, logger=logger,
+                        )
                         if self._on_response:
-                            await self._on_response(f"[{self.name} queue full, message rejected]")
+                            msg = f"[{self.name} queue full, message rejected]"
+                            await self._on_response(msg)
                         return
 
                     # Queue the message and show feedback.
                     await self._message_queue.put((from_agent, content))
                     if self._on_response:
-                        await self._on_response(f"[{self.name} is busy, message queued]")
+                        msg = f"[{self.name} is busy, message queued]"
+                        await self._on_response(msg)
                     logger.info(
                         "%s: queued message from %s (queue size: %d)",
                         self.name,
@@ -283,19 +291,28 @@ class CLIBridge:
                 )
             )
             if self._on_response:
-                await self._on_response(f"[{self.name}: insufficient memory ({available:.0f} MB available)]")
+                msg = (
+                    f"[{self.name}: insufficient memory"
+                    f" ({available:.0f} MB available)]"
+                )
+                await self._on_response(msg)
             self._current_claude_pid = None
             self._claude_busy = False
             return
 
-        # Include role only in the first message; follow-ups use the preserved conversation.
+        # Include role only in the first message; follow-ups use
+        # the preserved conversation.
         if is_followup:
             prompt = f"Task from {from_agent}: {content}"
         else:
             prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
 
         try:
-            cmd_args = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
+            cmd_args = [
+                "claude", "-p", prompt,
+                "--output-format", "stream-json",
+                "--verbose",
+            ]
 
             # Use --continue flag for follow-up messages to preserve context.
             if is_followup and self._claude_conversation_id is not None:
@@ -313,7 +330,10 @@ class CLIBridge:
             node_opts = cli_env.get("NODE_OPTIONS", "")
             if "--max-old-space-size" not in node_opts:
                 separator = " " if node_opts else ""
-                cli_env["NODE_OPTIONS"] = f"{node_opts}{separator}--max-old-space-size={_NODE_HEAP_LIMIT_MB}"
+                heap_flag = f"--max-old-space-size={_NODE_HEAP_LIMIT_MB}"
+                cli_env["NODE_OPTIONS"] = (
+                    f"{node_opts}{separator}{heap_flag}"
+                )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
@@ -332,7 +352,10 @@ class CLIBridge:
                 "Install: npm install -g @anthropic-ai/claude-code"
             )
             click.echo(error_msg, err=True)
-            record_error(self._recorder, self.name, "Claude CLI not found", logger=logger)
+            record_error(
+                self._recorder, self.name,
+                "Claude CLI not found", logger=logger,
+            )
             self._current_claude_pid = None
             self._claude_busy = False
             return
@@ -342,7 +365,9 @@ class CLIBridge:
             logger.error("%s: failed to spawn Claude CLI: %s", self.name, exc)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=f"Failed to spawn Claude CLI: {exc}", retrying=False, context="subprocess",
+                    ts="", seq=0, agent=self.name,
+                    error=f"Failed to spawn Claude CLI: {exc}",
+                    retrying=False, context="subprocess",
                 )
             )
             self._current_claude_pid = None
@@ -383,7 +408,10 @@ class CLIBridge:
             click.echo(error_msg, err=True)
 
             # Record full stderr in session log
-            full_error = f"Claude CLI exited with code {returncode}: {stderr_text[:2048]}"
+            full_error = (
+                f"Claude CLI exited with code {returncode}:"
+                f" {stderr_text[:2048]}"
+            )
             record_error(self._recorder, self.name, full_error, logger=logger)
             self._current_claude_pid = None
             self._claude_busy = False
@@ -447,7 +475,8 @@ class CLIBridge:
                 try:
                     event = json.loads(line_str)
                 except json.JSONDecodeError:
-                    # Check if this looks like incomplete JSON (doesn't end with newline from original).
+                    # Check if this looks like incomplete JSON
+                    # (doesn't end with newline from original).
                     # If the original line ended with \n, it's complete but malformed.
                     if decoded.endswith("\n"):
                         # Complete line but invalid JSON — log and skip.
@@ -472,7 +501,9 @@ class CLIBridge:
 
         return result_text
 
-    async def _dispatch_claude_event(self, event: dict[str, object], current_result: str) -> str:
+    async def _dispatch_claude_event(
+        self, event: dict[str, object], current_result: str,
+    ) -> str:
         """Process a single streaming event from Claude CLI.
 
         Claude CLI ``--output-format stream-json --verbose`` emits these
@@ -570,7 +601,11 @@ class CLIBridge:
 
             # Show user feedback when starting a queued message.
             if self._on_response:
-                await self._on_response(f"[{self.name} processing queued message from {from_agent}]")
+                msg = (
+                    f"[{self.name} processing queued message"
+                    f" from {from_agent}]"
+                )
+                await self._on_response(msg)
 
             # Record start/done events for each queued task.
             self._recorder.record(
@@ -684,7 +719,9 @@ class CLIBridge:
             logger.error("%s: subprocess exited with code %d", self.name, returncode)
             self._recorder.record(
                 ErrorEvent(
-                    ts="", seq=0, agent=self.name, error=error_msg, retrying=False, context="subprocess",
+                    ts="", seq=0, agent=self.name,
+                    error=error_msg, retrying=False,
+                    context="subprocess",
                 )
             )
 

@@ -131,7 +131,9 @@ class LoopBoundaryEvent(_EventBase):
     """Emitted when a loop iteration starts or ends."""
 
     type: Literal["loop_boundary"] = "loop_boundary"
-    boundary: Literal["start", "end"] = Field(description="Whether this is a loop start or end")
+    boundary: Literal["start", "end"] = Field(
+        description="Whether this is a loop start or end"
+    )
     iteration: int = Field(ge=1, description="Loop iteration number (1-indexed)")
 
 

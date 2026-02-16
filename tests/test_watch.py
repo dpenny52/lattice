@@ -1,7 +1,6 @@
 """Tests for the watch command and TUI."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -49,7 +48,13 @@ def test_session_stats_initialization():
 def test_watch_app_initialization(tmp_path: Path):
     """Test WatchApp initialization."""
     session_file = tmp_path / "test_session.jsonl"
-    session_file.write_text('{"type": "session_start", "ts": "2026-01-01T00:00:00.000Z", "seq": 0, "session_id": "test", "team": "test", "config_hash": "abc123"}\\n')
+    event = (
+        '{"type": "session_start",'
+        ' "ts": "2026-01-01T00:00:00.000Z",'
+        ' "seq": 0, "session_id": "test",'
+        ' "team": "test", "config_hash": "abc123"}'
+    )
+    session_file.write_text(event + "\\n")
 
     app = WatchApp(session_file=session_file, enable_input=False)
     assert app.session_file == session_file
@@ -59,7 +64,9 @@ def test_watch_app_initialization(tmp_path: Path):
     assert isinstance(app.stats, SessionStats)
 
 
-def test_find_latest_session_no_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_find_latest_session_no_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
     """Test _find_latest_session with no session files."""
     # Change to tmp directory with no sessions
     monkeypatch.chdir(tmp_path)
@@ -67,7 +74,9 @@ def test_find_latest_session_no_sessions(tmp_path: Path, monkeypatch: pytest.Mon
     assert result is None
 
 
-def test_find_latest_session_with_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_find_latest_session_with_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
     """Test _find_latest_session returns most recent session."""
     monkeypatch.chdir(tmp_path)
 

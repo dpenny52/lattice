@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import TypeAdapter
@@ -20,7 +20,6 @@ from lattice.agent.memory_profile import (
 from lattice.memory_monitor import get_pid_rss_mb
 from lattice.session.models import MemorySnapshotEvent, SessionEvent
 from lattice.session.recorder import SessionRecorder
-
 
 # ---------------------------------------------------------------------------
 # Helpers
