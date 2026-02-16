@@ -266,6 +266,7 @@ async def _run_session(
                     allowed_paths=config.allowed_paths or None,
                     on_response=_make_response_callback(name),
                     rate_gate=rate_gate,
+                    max_tokens=agent_config.max_tokens,
                 )
                 router.register(name, agent)
                 agents[name] = agent
@@ -772,6 +773,11 @@ def _install_heartbeat_hook(agent: LLMAgent, heartbeat: Heartbeat) -> None:
 # Loop mode
 # ------------------------------------------------------------------ #
 
+#: Seconds that ``pending_tasks`` must stay empty before an iteration is
+#: considered complete.  Prevents the race condition where the entry agent
+#: finishes before CLI agents register their tasks.
+_LOOP_SETTLE_SECONDS = 2.0
+
 
 async def _loop_mode(
     router: Router,
@@ -843,10 +849,17 @@ async def _loop_mode(
         # Send the initial prompt to the entry agent
         await router.send("user", entry_agent, initial_prompt)
 
-        # Wait for the agent to complete this iteration
+        # Wait for the agent to complete this iteration.
         # Two exit conditions:
         # 1. Heartbeat detects DONE marker -> exit entire loop
-        # 2. All router tasks complete -> continue to next iteration
+        # 2. All router tasks complete AND settle period elapses
+        #
+        # The settle period prevents a race condition where the entry
+        # agent's task completes before spawned subtasks (e.g. CLI
+        # agents) are tracked in pending_tasks.  We require pending_tasks
+        # to stay empty for _LOOP_SETTLE_SECONDS before moving on.
+        idle_since: float | None = None
+
         while not shutdown_event.is_set():
             # Give the agent time to start processing
             await asyncio.sleep(0.05)
@@ -869,8 +882,18 @@ async def _loop_mode(
             # Check if all tasks are done for this iteration
             pending = list(router.pending_tasks)
             if not pending:
-                # All tasks complete for this iteration
-                break
+                now = asyncio.get_event_loop().time()
+                if idle_since is None:
+                    idle_since = now
+                elif now - idle_since >= _LOOP_SETTLE_SECONDS:
+                    # Stayed empty for the full settle period — iteration done.
+                    break
+                # Still in the settle window, keep checking.
+                await asyncio.sleep(0.1)
+                continue
+
+            # Tasks are active — reset the settle timer.
+            idle_since = None
 
             # Wait for tasks to complete, checking periodically
             with contextlib.suppress(TimeoutError):

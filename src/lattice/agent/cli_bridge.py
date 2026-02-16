@@ -273,7 +273,16 @@ class CLIBridge:
             is_followup: If True, use --continue to preserve conversation context.
         """
         self._claude_busy = True
+        try:
+            await self._run_claude_task(from_agent, content, is_followup=is_followup)
+        finally:
+            self._current_claude_pid = None
+            self._claude_busy = False
 
+    async def _run_claude_task(
+        self, from_agent: str, content: str, *, is_followup: bool = False
+    ) -> None:
+        """Inner implementation of a Claude CLI task (called by _handle_claude_task)."""
         # Pre-flight memory check — refuse to spawn if system is too low.
         from lattice.memory_monitor import get_available_mb
 
@@ -301,8 +310,6 @@ class CLIBridge:
                     f"[{self.name}: insufficient memory ({available:.0f} MB available)]"
                 )
                 await self._on_response(msg)
-            self._current_claude_pid = None
-            self._claude_busy = False
             return
 
         # Include role only in the first message; follow-ups use
@@ -363,8 +370,6 @@ class CLIBridge:
                 "Claude CLI not found",
                 logger=logger,
             )
-            self._current_claude_pid = None
-            self._claude_busy = False
             return
         except OSError as exc:
             error_msg = f"Agent '{self.name}' — failed to spawn Claude CLI: {exc}"
@@ -380,8 +385,6 @@ class CLIBridge:
                     context="subprocess",
                 )
             )
-            self._current_claude_pid = None
-            self._claude_busy = False
             return
 
         # Stream stdout and parse events as they arrive.
@@ -422,8 +425,6 @@ class CLIBridge:
                 f"Claude CLI exited with code {returncode}: {stderr_text[:2048]}"
             )
             record_error(self._recorder, self.name, full_error, logger=logger)
-            self._current_claude_pid = None
-            self._claude_busy = False
             return
 
         if result_text:
@@ -433,9 +434,6 @@ class CLIBridge:
             # Skip routing back to "user" — that's handled by on_response.
             if from_agent != "user":
                 await self._router.send(self.name, from_agent, result_text)
-
-        self._current_claude_pid = None
-        self._claude_busy = False
 
     async def _stream_claude_output(self, proc: asyncio.subprocess.Process) -> str:
         """Stream and parse JSON events from Claude CLI stdout.

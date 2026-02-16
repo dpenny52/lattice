@@ -43,6 +43,10 @@ class AgentConfig(BaseModel):
         default=None,
         description="Endpoint URL for remote-type agents",
     )
+    max_tokens: int | None = Field(
+        default=None,
+        description="Maximum output tokens per LLM call (provider default if unset)",
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -5,17 +5,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
+from typing import Protocol, runtime_checkable
 
 import click
 
-from lattice.agent.cli_bridge import CLIBridge
-from lattice.agent.llm_agent import LLMAgent
-from lattice.agent.script_bridge import ScriptBridge
 from lattice.heartbeat import Heartbeat
 from lattice.router.router import Router
 from lattice.session.recorder import EndReason, SessionRecorder
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class Shutdownable(Protocol):
+    """Any agent that can be gracefully shut down."""
+
+    async def shutdown(self) -> None: ...
 
 
 def _format_duration(seconds: float) -> str:
@@ -44,8 +50,8 @@ class ShutdownManager:
         router: Router,
         recorder: SessionRecorder,
         heartbeat: Heartbeat | None,
-        cli_bridges: dict[str, CLIBridge],
-        all_agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
+        cli_bridges: Mapping[str, Shutdownable],
+        all_agents: Mapping[str, Shutdownable],
         shutdown_event: asyncio.Event,
         loop_count: int = 0,
     ) -> None:

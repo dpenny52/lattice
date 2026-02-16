@@ -40,6 +40,7 @@ class MockProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        **kwargs: Any,
     ) -> LLMResponse:
         self.calls.append({"messages": messages, "tools": tools, "model": model})
         resp = self._responses[self._call_count]
@@ -60,6 +61,7 @@ class FailThenSucceedProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        **kwargs: Any,
     ) -> LLMResponse:
         self._attempt += 1
         if self._attempt <= self._fail_count:
@@ -76,6 +78,7 @@ class AlwaysFailProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        **kwargs: Any,
     ) -> LLMResponse:
         msg = "Permanent API failure"
         raise RuntimeError(msg)
@@ -479,6 +482,7 @@ class TestComputeMood:
                 messages: list[dict[str, Any]],
                 tools: list[dict[str, Any]],
                 model: str,
+                **kwargs: Any,
             ) -> LLMResponse:
                 observed_mood.append(agent._compute_mood())
                 return LLMResponse(content="done", usage=TokenUsage(5, 2))

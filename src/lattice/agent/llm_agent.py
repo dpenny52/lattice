@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import re
 import time
@@ -41,6 +42,24 @@ _RATE_LIMIT_PAUSE = 60.0
 
 #: Tool results above this size (chars) are compacted after the LLM processes them.
 _TOOL_RESULT_COMPACT_THRESHOLD = 1000
+
+#: Estimated characters per token (conservative average for English text).
+_CHARS_PER_TOKEN = 4
+
+#: Maximum estimated tokens allowed in the conversation thread before truncation.
+#: Set conservatively below common model limits (128k–200k) to leave room for
+#: the system prompt and the next response.
+_MAX_THREAD_TOKENS = 80_000
+
+
+class _ErrorKind(enum.Enum):
+    """Classification of LLM API errors for retry/display logic."""
+
+    RATE_LIMIT = "rate_limit"
+    AUTH = "auth"
+    SERVER = "server"
+    NETWORK = "network"
+    UNKNOWN = "unknown"
 
 
 class RateLimitGate:
@@ -117,6 +136,7 @@ class LLMAgent:
         allowed_paths: list[str] | None = None,
         on_response: Callable[[str], Awaitable[None]] | None = None,
         rate_gate: RateLimitGate | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self.name = name
         self._role = role
@@ -126,6 +146,7 @@ class LLMAgent:
         self._peer_names = peer_names
         self._on_response = on_response
         self._rate_gate = rate_gate
+        self._max_tokens = max_tokens
 
         # Single unified conversation thread.
         self._thread: list[dict[str, Any]] = []
@@ -217,6 +238,9 @@ class LLMAgent:
         tool-call loops (e.g. an LLM that never stops calling tools).
         """
         for _iteration in range(_MAX_LOOP_ITERATIONS):
+            # Truncate old messages if the thread is getting too large.
+            self._truncate_thread_if_needed(thread)
+
             # Everything before this index will have been seen after the call.
             pre_call_len = len(thread)
 
@@ -294,10 +318,60 @@ class LLMAgent:
             )
 
     @staticmethod
-    def _is_rate_limit_error(exc: BaseException) -> bool:
-        """Return True if *exc* looks like a 429 rate-limit response."""
+    def _classify_error(exc: BaseException) -> _ErrorKind:
+        """Classify an LLM API exception for retry/display logic."""
         exc_str = str(exc).lower()
-        return "429" in exc_str or "rate_limit" in exc_str or "rate limit" in exc_str
+        if "429" in exc_str or "rate_limit" in exc_str or "rate limit" in exc_str:
+            return _ErrorKind.RATE_LIMIT
+        if (
+            "401" in exc_str
+            or "unauthorized" in exc_str
+            or "api key" in exc_str
+            or "authentication" in exc_str
+        ):
+            return _ErrorKind.AUTH
+        if (
+            "500" in exc_str
+            or "internal server" in exc_str
+            or "service unavailable" in exc_str
+        ):
+            return _ErrorKind.SERVER
+        if any(kw in exc_str for kw in ("connection", "network", "timeout", "dns")):
+            return _ErrorKind.NETWORK
+        return _ErrorKind.UNKNOWN
+
+    def _format_error_message(
+        self,
+        kind: _ErrorKind,
+        safe_error: str,
+        provider: str,
+        retrying: bool,
+        attempt: int,
+    ) -> str:
+        """Build a user-friendly error message based on error classification."""
+        delay = _BASE_DELAY * (2 ** (attempt - 1))
+        retry_suffix = f" Retrying in {delay:.0f}s..." if retrying else ""
+
+        match kind:
+            case _ErrorKind.RATE_LIMIT:
+                pause = int(_RATE_LIMIT_PAUSE)
+                base = f"Agent '{self.name}' got a 429 from {provider} (rate limited)."
+                return base + (f" Retrying in {pause}s..." if retrying else "")
+            case _ErrorKind.AUTH:
+                return (
+                    f"Agent '{self.name}' got a 401"
+                    f" from {provider} (authentication"
+                    " failed). Check your API key."
+                )
+            case _ErrorKind.SERVER:
+                base = f"Agent '{self.name}' got a 500 from {provider} (server error)."
+                return base + retry_suffix
+            case _ErrorKind.NETWORK:
+                base = f"Agent '{self.name}' — network error: {safe_error}."
+                return (base + retry_suffix).rstrip(".")
+            case _:
+                base = f"Agent '{self.name}' — LLM call failed: {safe_error}"
+                return base + retry_suffix
 
     async def _call_llm(self, thread: list[dict[str, Any]]) -> LLMResponse | None:
         """Call the LLM with retries and exponential backoff."""
@@ -321,82 +395,22 @@ class LLMAgent:
 
             start = time.monotonic()
             try:
-                response = await self._provider.chat(messages, tools, self._model)
+                response = await self._provider.chat(
+                    messages, tools, self._model, max_tokens=self._max_tokens
+                )
             except Exception as exc:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 retrying = attempt < _MAX_RETRIES
                 safe_error = _sanitize_error(exc)
+                kind = self._classify_error(exc)
 
-                # Generate user-friendly error message
                 provider = (
                     self._model.split("/")[0] if "/" in self._model else "provider"
                 )
-                if self._is_rate_limit_error(exc):
-                    pause = int(_RATE_LIMIT_PAUSE)
-                    if retrying:
-                        user_msg = (
-                            f"Agent '{self.name}' got a 429"
-                            f" from {provider} (rate limited)."
-                            f" Retrying in {pause}s..."
-                        )
-                    else:
-                        user_msg = (
-                            f"Agent '{self.name}' got a 429"
-                            f" from {provider} (rate limited)."
-                        )
-                    click.echo(user_msg, err=True)
-                elif (
-                    "401" in safe_error
-                    or "unauthorized" in safe_error.lower()
-                    or "api key" in safe_error.lower()
-                    or "authentication" in safe_error.lower()
-                ):
-                    msg_401 = (
-                        f"Agent '{self.name}' got a 401"
-                        f" from {provider} (authentication"
-                        " failed). Check your API key."
-                    )
-                    click.echo(msg_401, err=True)
-                elif (
-                    "500" in safe_error
-                    or "internal server" in safe_error.lower()
-                    or "service unavailable" in safe_error.lower()
-                ):
-                    if retrying:
-                        delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg = (
-                            f"Agent '{self.name}' got a 500"
-                            f" from {provider} (server error)."
-                            f" Retrying in {delay:.0f}s..."
-                        )
-                    else:
-                        user_msg = (
-                            f"Agent '{self.name}' got a 500"
-                            f" from {provider} (server error)."
-                        )
-                    click.echo(user_msg, err=True)
-                elif (
-                    "connection" in safe_error.lower()
-                    or "network" in safe_error.lower()
-                    or "timeout" in safe_error.lower()
-                    or "dns" in safe_error.lower()
-                ):
-                    if retrying:
-                        delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg = (
-                            f"Agent '{self.name}'"
-                            f" — network error: {safe_error}."
-                            f" Retrying in {delay:.0f}s..."
-                        )
-                    else:
-                        user_msg = f"Agent '{self.name}' — network error: {safe_error}"
-                    click.echo(user_msg, err=True)
-                else:
-                    user_msg = f"Agent '{self.name}' — LLM call failed: {safe_error}"
-                    if retrying:
-                        delay = _BASE_DELAY * (2 ** (attempt - 1))
-                        user_msg += f". Retrying in {delay:.0f}s..."
-                    click.echo(user_msg, err=True)
+                user_msg = self._format_error_message(
+                    kind, safe_error, provider, retrying, attempt
+                )
+                click.echo(user_msg, err=True)
 
                 logger.warning(
                     "LLM call failed (attempt %d/%d): %s",
@@ -425,7 +439,7 @@ class LLMAgent:
                     )
                 )
                 if retrying:
-                    if self._rate_gate is not None and self._is_rate_limit_error(exc):
+                    if self._rate_gate is not None and kind == _ErrorKind.RATE_LIMIT:
                         self._rate_gate.pause()
                         await self._rate_gate.wait_if_paused()
                     else:
@@ -479,6 +493,45 @@ class LLMAgent:
             entry["content"] = (
                 f"[{name} result: {orig_len:,} chars — compacted after processing]"
             )
+
+    @staticmethod
+    def _estimate_thread_tokens(thread: list[dict[str, Any]]) -> int:
+        """Rough token estimate for the conversation thread."""
+        total_chars = 0
+        for msg in thread:
+            content = msg.get("content", "")
+            total_chars += len(str(content))
+            # Count tool call arguments too.
+            for tc in msg.get("tool_calls", []):
+                total_chars += len(str(tc.get("arguments", "")))
+        return total_chars // _CHARS_PER_TOKEN
+
+    def _truncate_thread_if_needed(self, thread: list[dict[str, Any]]) -> None:
+        """Remove oldest messages when estimated tokens exceed the budget.
+
+        Preserves the most recent messages so the LLM keeps context about
+        its current task.  Logs when truncation happens.
+        """
+        estimated = self._estimate_thread_tokens(thread)
+        if estimated <= _MAX_THREAD_TOKENS:
+            return
+
+        original_len = len(thread)
+        # Remove from the front (oldest messages) until under budget.
+        # Keep at least the last 4 messages for continuity.
+        while (
+            len(thread) > 4
+            and self._estimate_thread_tokens(thread) > _MAX_THREAD_TOKENS
+        ):
+            thread.pop(0)
+
+        logger.info(
+            "%s: thread truncated from %d to %d messages (~%d tokens)",
+            self.name,
+            original_len,
+            len(thread),
+            self._estimate_thread_tokens(thread),
+        )
 
     def _build_messages(self, thread: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Prepend the system prompt to the conversation thread."""

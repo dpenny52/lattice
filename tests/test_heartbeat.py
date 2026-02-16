@@ -37,6 +37,7 @@ class MockProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        **kwargs: Any,
     ) -> LLMResponse:
         resp = self._responses[self._call_count % len(self._responses)]
         self._call_count += 1

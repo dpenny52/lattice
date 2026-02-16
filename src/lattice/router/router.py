@@ -127,15 +127,14 @@ class Router:
         content: str,
         targets: list[str] | None = None,
     ) -> None:
-        """Send a message to multiple agents concurrently.
+        """Send a message to multiple agents (fire-and-forget).
 
         If *targets* is ``None``, sends to all registered agents except
-        the sender. Errors in one dispatch don't block others.
+        the sender.  Tasks are tracked in ``pending_tasks`` like ``send()``.
         """
         if targets is None:
             targets = [name for name in self._agents if name != from_agent]
 
-        tasks: list[asyncio.Task[None]] = []
         for target in targets:
             try:
                 if target not in self._agents:
@@ -162,15 +161,10 @@ class Router:
 
                 agent = self._agents[target]
                 task = asyncio.create_task(agent.handle_message(from_agent, content))
-                tasks.append(task)
+                self._pending_tasks.add(task)
+                task.add_done_callback(self._task_done)
             except Exception:
                 logger.exception("Broadcast error setting up dispatch to '%s'", target)
-
-        # Await all tasks, isolating errors
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.error("Broadcast dispatch error: %s", result)
 
     def _task_done(self, task: asyncio.Task[None]) -> None:
         """Callback for fire-and-forget tasks — log errors, remove from set."""

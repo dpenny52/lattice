@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from lattice.session.recorder import SessionRecorder
 
 logger = logging.getLogger(__name__)
+
+#: Type alias for async tool handler functions.
+ToolHandler = Callable[[dict[str, Any]], Awaitable[str]]
 
 SEND_MESSAGE_TOOL: dict[str, Any] = {
     "name": "send_message",
@@ -80,6 +84,19 @@ class ToolRegistry:
         # Always include send_message.
         self._tools: dict[str, dict[str, Any]] = {"send_message": SEND_MESSAGE_TOOL}
 
+        # Handler dispatch table — maps tool name → async handler function.
+        self._handlers: dict[str, ToolHandler] = {
+            "send_message": self._handle_send_message,
+            "web-search": lambda args: handle_web_search(args),
+            "file-read": lambda args: handle_file_read(
+                args, self._working_dir, self._allowed_paths
+            ),
+            "file-write": lambda args: handle_file_write(
+                args, self._working_dir, self._allowed_paths
+            ),
+            "code-exec": lambda args: handle_code_exec(args),
+        }
+
         # Register configured built-in tools.
         for tool in configured_tools or []:
             if _is_mcp_reference(tool):
@@ -137,32 +154,12 @@ class ToolRegistry:
         return result
 
     async def _dispatch(self, name: str, arguments: dict[str, Any]) -> str:
-        """Route to the correct handler."""
-        if name == "send_message":
-            return await self._handle_send_message(arguments)
-
-        if name == "web-search":
-            return await handle_web_search(arguments)
-
-        if name == "file-read":
-            return await handle_file_read(
-                arguments,
-                self._working_dir,
-                self._allowed_paths,
-            )
-
-        if name == "file-write":
-            return await handle_file_write(
-                arguments,
-                self._working_dir,
-                self._allowed_paths,
-            )
-
-        if name == "code-exec":
-            return await handle_code_exec(arguments)
-
-        msg = f"Unknown tool: {name}"
-        raise ValueError(msg)
+        """Route to the correct handler via dispatch table."""
+        handler = self._handlers.get(name)
+        if handler is None:
+            msg = f"Unknown tool: {name}"
+            raise ValueError(msg)
+        return await handler(arguments)
 
     async def _handle_send_message(self, arguments: dict[str, Any]) -> str:
         """Dispatch a message through the router (fire-and-forget)."""

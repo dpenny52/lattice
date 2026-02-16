@@ -42,6 +42,8 @@ class LLMProvider(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        *,
+        max_tokens: int | None = None,
     ) -> LLMResponse: ...
 
 
@@ -136,6 +138,8 @@ class AnthropicProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        *,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         system_text, api_messages = self._translate_messages(messages)
 
@@ -151,7 +155,7 @@ class AnthropicProvider:
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens or 4096,
             "messages": api_messages,
         }
         if system_text:
@@ -211,6 +215,8 @@ class OpenAIProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        *,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         openai_tools = [
             {
@@ -228,6 +234,8 @@ class OpenAIProvider:
             "model": model,
             "messages": messages,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         if openai_tools:
             kwargs["tools"] = openai_tools
 
@@ -279,6 +287,8 @@ class GoogleProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str,
+        *,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         from google.genai import types
 

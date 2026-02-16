@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -161,7 +162,12 @@ async def handle_web_search(arguments: dict[str, Any]) -> str:
     def _fetch() -> str:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Lattice/0.1"},
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; Lattice/0.1; "
+                    "+https://github.com/lattice-agent)"
+                )
+            },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw: bytes = resp.read()
@@ -178,61 +184,61 @@ async def handle_web_search(arguments: dict[str, Any]) -> str:
     return json.dumps({"query": query, "results": results})
 
 
-def _parse_ddg_html(html: str, max_results: int) -> list[dict[str, str]]:
-    """Extract search results from DuckDuckGo HTML response.
+class _DDGResultParser(HTMLParser):
+    """Extract search results from DuckDuckGo HTML using stdlib HTMLParser.
 
-    Uses simple string parsing to avoid adding an HTML parser dependency.
+    Looks for ``<a class="result__a" href="...">Title</a>`` and
+    ``<a class="result__snippet" ...>Snippet</a>`` elements.
     """
-    results: list[dict[str, str]] = []
-    marker = 'class="result__a"'
-    pos = 0
 
-    while len(results) < max_results:
-        idx = html.find(marker, pos)
-        if idx == -1:
-            break
+    def __init__(self, max_results: int) -> None:
+        super().__init__()
+        self.results: list[dict[str, str]] = []
+        self._max_results = max_results
+        self._in_result_link = False
+        self._in_snippet = False
+        self._current: dict[str, str] = {}
+        self._text_buf: list[str] = []
 
-        # Extract href
-        href_start = html.rfind('href="', max(0, idx - 200), idx)
-        href = ""
-        if href_start != -1:
-            href_start += len('href="')
-            href_end = html.find('"', href_start)
-            if href_end != -1:
-                href = html[href_start:href_end]
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if len(self.results) >= self._max_results:
+            return
+        attrs_dict = dict(attrs)
+        cls = attrs_dict.get("class", "") or ""
 
-        # Extract link text
-        tag_end = html.find(">", idx)
-        if tag_end == -1:
-            pos = idx + len(marker)
-            continue
-        close_tag = html.find("</a>", tag_end)
-        title = ""
-        if close_tag != -1:
-            title = html[tag_end + 1 : close_tag]
-            title = re.sub(r"<[^>]+>", "", title).strip()
+        if tag == "a" and "result__a" in cls:
+            self._in_result_link = True
+            self._current = {
+                "url": attrs_dict.get("href", "") or "",
+                "title": "",
+                "snippet": "",
+            }
+            self._text_buf = []
+        elif "result__snippet" in cls:
+            self._in_snippet = True
+            self._text_buf = []
 
-        # Extract snippet
-        snippet_marker = 'class="result__snippet"'
-        search_from = close_tag if close_tag != -1 else idx
-        snippet_idx = html.find(snippet_marker, search_from)
-        snippet = ""
-        next_result = html.find(marker, idx + len(marker))
-        in_bounds = next_result == -1 or snippet_idx < next_result
-        if snippet_idx != -1 and in_bounds:
-            stag_end = html.find(">", snippet_idx)
-            if stag_end != -1:
-                sclose = html.find("</", stag_end)
-                if sclose != -1:
-                    snippet = html[stag_end + 1 : sclose]
-                    snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+    def handle_endtag(self, tag: str) -> None:
+        if self._in_result_link and tag == "a":
+            self._in_result_link = False
+            self._current["title"] = "".join(self._text_buf).strip()
+        elif self._in_snippet:
+            self._in_snippet = False
+            self._current["snippet"] = "".join(self._text_buf).strip()
+            if self._current.get("title") or self._current.get("url"):
+                self.results.append(self._current)
+            self._current = {}
 
-        if title or href:
-            results.append({"title": title, "url": href, "snippet": snippet})
+    def handle_data(self, data: str) -> None:
+        if self._in_result_link or self._in_snippet:
+            self._text_buf.append(data)
 
-        pos = idx + len(marker)
 
-    return results
+def _parse_ddg_html(html: str, max_results: int) -> list[dict[str, str]]:
+    """Extract search results from DuckDuckGo HTML response."""
+    parser = _DDGResultParser(max_results)
+    parser.feed(html)
+    return parser.results
 
 
 async def handle_file_read(
@@ -276,35 +282,52 @@ async def handle_file_write(
 
 
 async def handle_code_exec(arguments: dict[str, Any]) -> str:
-    """Execute Python code in a subprocess with a timeout."""
+    """Execute Python code in a sandboxed subprocess with a timeout.
+
+    Sandboxing measures:
+    - Runs in a temporary working directory (cleaned up after execution).
+    - Restricted environment: only PATH, HOME (set to tmpdir), and LANG.
+    - LLM API keys and other sensitive env vars are NOT inherited.
+    """
     code = arguments.get("code", "")
     timeout = min(
         arguments.get("timeout", _DEFAULT_TIMEOUT),
         _MAX_TIMEOUT,
     )
 
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        code,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
+    with tempfile.TemporaryDirectory(prefix="lattice_exec_") as tmpdir:
+        # Minimal environment — no inherited secrets or config.
+        restricted_env = {
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "HOME": tmpdir,
+            "LANG": "en_US.UTF-8",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=tmpdir,
+            env=restricted_env,
         )
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return json.dumps(
-            {
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": "Execution timed out",
-                "timed_out": True,
-            }
-        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return json.dumps(
+                {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": "Execution timed out",
+                    "timed_out": True,
+                }
+            )
 
     return json.dumps(
         {
