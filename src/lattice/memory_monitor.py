@@ -93,7 +93,12 @@ def _get_total_system_mb() -> float:
 
 
 def _get_available_mb_macos() -> float | None:
-    """Get available memory via Mach host_statistics64 (no subprocess)."""
+    """Get available memory via Mach host_statistics64 (no subprocess).
+
+    Uses a conservative estimate: free + purgeable pages only.
+    Inactive pages are excluded because they may be compressed or
+    swapped and not cheaply reclaimable under memory pressure.
+    """
     if _libc is None:
         return None
 
@@ -109,7 +114,10 @@ def _get_available_mb_macos() -> float | None:
             return None
 
         page_size = os.sysconf("SC_PAGE_SIZE")
-        available_pages = stats.free_count + stats.inactive_count + stats.purgeable_count
+        # Conservative: only count truly free + purgeable pages.
+        # Inactive pages look "available" but may be compressed/swapped
+        # and reclaiming them under pressure triggers the OOM killer.
+        available_pages = stats.free_count + stats.purgeable_count
         return (available_pages * page_size) / (1024 * 1024)
     except Exception:
         return None
@@ -128,11 +136,81 @@ def _get_available_mb_linux() -> float | None:
     return None
 
 
-def _get_available_mb() -> float | None:
+def get_available_mb() -> float | None:
     """Return available system memory in MB (platform-aware, no subprocess)."""
     if platform.system() == "Darwin":
         return _get_available_mb_macos()
     return _get_available_mb_linux()
+
+
+# ------------------------------------------------------------------ #
+# Per-PID RSS measurement (no subprocess, no psutil)
+# ------------------------------------------------------------------ #
+
+#: macOS proc_taskinfo struct — must exactly match the <libproc.h>
+#: proc_taskinfo layout.  If Apple changes this struct in a future macOS
+#: version the fields will silently return garbage; the blanket
+#: ``except Exception`` in the caller prevents crashes but not bad data.
+class _ProcTaskInfo(ctypes.Structure):
+    _fields_ = [
+        ("pti_virtual_size", ctypes.c_uint64),
+        ("pti_resident_size", ctypes.c_uint64),
+        ("pti_total_user", ctypes.c_uint64),
+        ("pti_total_system", ctypes.c_uint64),
+        ("pti_threads_user", ctypes.c_uint64),
+        ("pti_threads_system", ctypes.c_uint64),
+        ("pti_policy", ctypes.c_int32),
+        ("pti_faults", ctypes.c_int32),
+        ("pti_pageins", ctypes.c_int32),
+        ("pti_cow_faults", ctypes.c_int32),
+        ("pti_messages_sent", ctypes.c_int32),
+        ("pti_messages_received", ctypes.c_int32),
+        ("pti_syscalls_mach", ctypes.c_int32),
+        ("pti_syscalls_unix", ctypes.c_int32),
+        ("pti_csw", ctypes.c_int32),
+        ("pti_threadnum", ctypes.c_int32),
+        ("pti_numrunning", ctypes.c_int32),
+        ("pti_priority", ctypes.c_int32),
+    ]
+
+
+#: PROC_PIDTASKINFO flavor for proc_pidinfo().
+_PROC_PIDTASKINFO = 4
+
+
+def _get_pid_rss_mb_macos(pid: int) -> float | None:
+    """Get RSS for a specific PID via proc_pidinfo (no subprocess)."""
+    if _libc is None:
+        return None
+    try:
+        info = _ProcTaskInfo()
+        size = ctypes.sizeof(info)
+        ret = _libc.proc_pidinfo(pid, _PROC_PIDTASKINFO, 0, ctypes.byref(info), size)
+        if ret <= 0:
+            return None
+        return info.pti_resident_size / (1024 * 1024)
+    except Exception:
+        return None
+
+
+def _get_pid_rss_mb_linux(pid: int) -> float | None:
+    """Get RSS for a specific PID by reading /proc/{pid}/status."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    # "VmRSS:   12345 kB"
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return None
+
+
+def get_pid_rss_mb(pid: int) -> float | None:
+    """Return RSS in MB for a specific PID (platform-aware, no subprocess)."""
+    if platform.system() == "Darwin":
+        return _get_pid_rss_mb_macos(pid)
+    return _get_pid_rss_mb_linux(pid)
 
 
 class MemoryMonitor:
@@ -163,7 +241,7 @@ class MemoryMonitor:
             return
 
         # Verify we can actually read memory stats.
-        test = _get_available_mb()
+        test = get_available_mb()
         if test is None:
             logger.warning("Cannot read system memory stats — memory monitor disabled")
             return
@@ -201,7 +279,7 @@ class MemoryMonitor:
 
     def _check(self) -> None:
         """Run a single memory check (synchronous — no subprocess)."""
-        available_mb = _get_available_mb()
+        available_mb = get_available_mb()
         if available_mb is None:
             return
 

@@ -176,6 +176,35 @@ class CLIProgressEvent(_EventBase):
     status: str = Field(description="Progress status message")
 
 
+class MemorySnapshotEvent(_EventBase):
+    """Periodic per-agent memory snapshot for profiling."""
+
+    type: Literal["memory_snapshot"] = "memory_snapshot"
+    agent: str = Field(description="Agent name")
+    agent_type: str = Field(description="Agent type: llm, cli, or script")
+    process_rss_mb: float | None = Field(
+        default=None, description="Host process RSS in MB"
+    )
+    subprocess_rss_mb: float | None = Field(
+        default=None, description="Subprocess RSS in MB (CLI agents)"
+    )
+    subprocess_pid: int | None = Field(
+        default=None, description="Subprocess PID (CLI agents)"
+    )
+    thread_messages: int | None = Field(
+        default=None, description="Message count in conversation thread (LLM agents)"
+    )
+    thread_size_kb: float | None = Field(
+        default=None, description="Estimated thread size in KB (LLM agents)"
+    )
+    queue_depth: int | None = Field(
+        default=None, description="Message queue depth (CLI agents)"
+    )
+    system_available_mb: float | None = Field(
+        default=None, description="System available memory in MB"
+    )
+
+
 def _event_discriminator(v: Any) -> str:
     """Extract the discriminator value from raw data or a model instance."""
     if isinstance(v, dict):
@@ -200,7 +229,8 @@ SessionEvent = Annotated[
     | Annotated[CLITextChunkEvent, Tag("cli_text_chunk")]
     | Annotated[CLIToolCallEvent, Tag("cli_tool_call")]
     | Annotated[CLIThinkingEvent, Tag("cli_thinking")]
-    | Annotated[CLIProgressEvent, Tag("cli_progress")],
+    | Annotated[CLIProgressEvent, Tag("cli_progress")]
+    | Annotated[MemorySnapshotEvent, Tag("memory_snapshot")],
     Discriminator(_event_discriminator),
 ]
 """Discriminated union of all session event types."""

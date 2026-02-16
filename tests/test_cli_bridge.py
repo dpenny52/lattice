@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from lattice.agent.cli_bridge import CLIBridge
 from lattice.config.models import AgentConfig, LatticeConfig, TopologyConfig
 from lattice.router.router import Agent, Router
@@ -23,6 +25,22 @@ from lattice.session.models import (
     StatusEvent,
 )
 from lattice.session.recorder import SessionRecorder
+
+# ------------------------------------------------------------------ #
+# Fixtures
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture(autouse=True)
+def _mock_available_memory():
+    """Ensure the pre-flight memory gate never blocks tests.
+
+    Individual tests that need to exercise the gate (e.g. TestClaudeMemoryGate)
+    apply their own, more specific patch which takes precedence.
+    """
+    with patch("lattice.memory_monitor.get_available_mb", return_value=8192.0):
+        yield
+
 
 # ------------------------------------------------------------------ #
 # Helpers
@@ -1689,3 +1707,70 @@ class TestClaudeStreaming:
         captured = capsys.readouterr()
         assert "No agents configured" not in captured.err
         assert "Agents: 1" in captured.out
+
+
+# ------------------------------------------------------------------ #
+# Pre-flight memory gate
+# ------------------------------------------------------------------ #
+
+
+class TestClaudeMemoryGate:
+    """Tests for the pre-flight memory check in _handle_claude_task."""
+
+    async def test_low_memory_blocks_spawn(self, tmp_path: Path) -> None:
+        """Agent should refuse to spawn and record an error when memory is low."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(router, recorder, cli_type="claude", on_response=_async_capture(captured))
+        bridge._started = True
+        events = _capture_events(recorder)
+
+        with patch("lattice.memory_monitor.get_available_mb", return_value=500.0):
+            await bridge._handle_claude_task("user", "do stuff")
+
+        # Should NOT have spawned a subprocess.
+        assert bridge._current_claude_pid is None
+        assert not bridge._claude_busy
+
+        # Should have recorded an ErrorEvent.
+        error_events = [e for e in events if isinstance(e, ErrorEvent)]
+        assert len(error_events) == 1
+        assert "Insufficient memory" in error_events[0].error
+
+        # Should have notified via on_response.
+        assert any("insufficient memory" in msg for msg in captured)
+
+    async def test_none_memory_allows_spawn(self, tmp_path: Path) -> None:
+        """When get_available_mb returns None (unsupported), spawn should proceed."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        bridge._started = True
+
+        proc, stdout = _make_mock_claude_process("done")
+        stdout.close()
+
+        with (
+            patch("lattice.memory_monitor.get_available_mb", return_value=None),
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc),
+        ):
+            await bridge._handle_claude_task("user", "do stuff")
+
+        # Should have attempted spawn (proc.wait was called).
+        proc.wait.assert_awaited()
+
+    async def test_sufficient_memory_allows_spawn(self, tmp_path: Path) -> None:
+        """When memory is above the threshold, spawn should proceed normally."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="claude")
+        bridge._started = True
+
+        proc, stdout = _make_mock_claude_process("all good")
+        stdout.close()
+
+        with (
+            patch("lattice.memory_monitor.get_available_mb", return_value=2048.0),
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc),
+        ):
+            await bridge._handle_claude_task("user", "do stuff")
+
+        proc.wait.assert_awaited()

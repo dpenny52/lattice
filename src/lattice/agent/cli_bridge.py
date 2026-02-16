@@ -39,7 +39,11 @@ _STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
 
 #: Max V8 heap size (MB) for Node.js CLI subprocesses (e.g. Claude CLI).
 #: Prevents a single agent from OOM-killing the entire process tree.
-_NODE_HEAP_LIMIT_MB = 4096
+_NODE_HEAP_LIMIT_MB = 2048
+
+#: Minimum available system memory (MB) required to spawn a CLI subprocess.
+#: If below this, the agent refuses to start and reports an error.
+_MIN_AVAILABLE_MB = 1024
 
 
 class CLIBridge:
@@ -91,6 +95,23 @@ class CLIBridge:
         self._claude_busy = False
         self._claude_busy_lock = asyncio.Lock()
         self._claude_conversation_id: str | None = None
+
+        # Per-agent memory profiling: current Claude subprocess PID.
+        self._current_claude_pid: int | None = None
+
+    @property
+    def current_subprocess_pid(self) -> int | None:
+        """PID of the currently running subprocess, if any.
+
+        For Claude adapter: the PID of the active ``claude`` subprocess.
+        For custom CLI: the PID of the long-running process.
+        Returns ``None`` when no subprocess is running.
+        """
+        # Custom CLI — long-running process.
+        if self._process is not None and self._process.returncode is None:
+            return self._process.pid
+        # Claude adapter — per-task subprocess.
+        return self._current_claude_pid
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -244,6 +265,31 @@ class CLIBridge:
         """
         self._claude_busy = True
 
+        # Pre-flight memory check — refuse to spawn if system is too low.
+        from lattice.memory_monitor import get_available_mb
+        available = get_available_mb()
+        if available is not None and available < _MIN_AVAILABLE_MB:
+            error_msg = (
+                f"Agent '{self.name}' — not enough memory to spawn CLI subprocess. "
+                f"Available: {available:.0f} MB, required: {_MIN_AVAILABLE_MB} MB. "
+                f"Close other applications to free memory."
+            )
+            import click
+            click.echo(error_msg, err=True)
+            logger.error("%s: %s", self.name, error_msg)
+            self._recorder.record(
+                ErrorEvent(
+                    ts="", seq=0, agent=self.name,
+                    error=f"Insufficient memory: {available:.0f}MB available",
+                    retrying=False, context="subprocess",
+                )
+            )
+            if self._on_response:
+                await self._on_response(f"[{self.name}: insufficient memory ({available:.0f} MB available)]")
+            self._current_claude_pid = None
+            self._claude_busy = False
+            return
+
         # Include role only in the first message; follow-ups use the preserved conversation.
         if is_followup:
             prompt = f"Task from {from_agent}: {content}"
@@ -279,6 +325,7 @@ class CLIBridge:
                 limit=_MAX_LINE_BYTES,
                 env=cli_env,
             )
+            self._current_claude_pid = proc.pid
         except FileNotFoundError:
             error_msg = (
                 f"Agent '{self.name}' — Claude CLI not found.\n"
@@ -293,6 +340,7 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error="Claude CLI not found", retrying=False, context="subprocess",
                 )
             )
+            self._current_claude_pid = None
             self._claude_busy = False
             return
         except OSError as exc:
@@ -305,6 +353,7 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error=f"Failed to spawn Claude CLI: {exc}", retrying=False, context="subprocess",
                 )
             )
+            self._current_claude_pid = None
             self._claude_busy = False
             return
 
@@ -352,6 +401,7 @@ class CLIBridge:
                     ts="", seq=0, agent=self.name, error=full_error, retrying=False, context="subprocess",
                 )
             )
+            self._current_claude_pid = None
             self._claude_busy = False
             return
 
@@ -363,6 +413,7 @@ class CLIBridge:
             if from_agent != "user":
                 await self._router.send(self.name, from_agent, result_text)
 
+        self._current_claude_pid = None
         self._claude_busy = False
 
     async def _stream_claude_output(self, proc: asyncio.subprocess.Process) -> str:

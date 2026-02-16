@@ -12,6 +12,7 @@ import click
 
 from lattice.agent.cli_bridge import CLIBridge
 from lattice.agent.llm_agent import LLMAgent, RateLimitGate
+from lattice.agent.memory_profile import AgentMemoryProfiler
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.config.models import LatticeConfig
 from lattice.config.parser import ConfigError, load_config
@@ -226,6 +227,23 @@ async def _run_session(
     )
     await mem_monitor.start()
 
+    # 9. Create per-agent memory profiler
+    session_dir = recorder.session_file.parent
+    session_base = recorder.session_file.stem  # e.g. "2026-02-15_team_abc123"
+    mem_profiler = AgentMemoryProfiler(
+        recorder=recorder,
+        shutdown_event=shutdown_event,
+        sessions_dir=session_dir,
+        session_base_name=session_base,
+    )
+    for name, agent in agents.items():
+        mem_profiler.register(name, "llm", agent)
+    for name, bridge in cli_bridges.items():
+        mem_profiler.register(name, "cli", bridge)
+    for name, script in script_bridges.items():
+        mem_profiler.register(name, "script", script)
+    await mem_profiler.start()
+
     # Track why we're shutting down and loop count
     shutdown_reason = "user_shutdown"
     loop_count = 0
@@ -253,6 +271,7 @@ async def _run_session(
                 router, entry, all_agents, shutdown_event, heartbeat,
             )
     finally:
+        await mem_profiler.stop()
         await mem_monitor.stop()
 
         # Create shutdown manager with loop count

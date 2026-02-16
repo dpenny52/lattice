@@ -155,9 +155,12 @@ class TestSubprocessErrorReporting:
         )
 
         # Mock subprocess to raise FileNotFoundError
-        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError()):
-            with patch("click.echo") as mock_echo:
-                await bridge.handle_message("user", "test")
+        with (
+            patch("lattice.memory_monitor.get_available_mb", return_value=8192.0),
+            patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError()),
+            patch("click.echo") as mock_echo,
+        ):
+            await bridge.handle_message("user", "test")
 
         # Verify helpful error message was shown
         error_calls = [call for call in mock_echo.call_args_list if len(call[0]) > 0]

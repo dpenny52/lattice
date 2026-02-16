@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import platform
+import resource
 import shlex
 from collections.abc import Awaitable, Callable
 
@@ -46,6 +48,9 @@ class ScriptBridge:
         self._recorder = recorder
         self._timeout = timeout
         self._on_response = on_response
+
+        # Peak RSS delta from last execution (MB), for memory profiling.
+        self._last_peak_rss_mb: float | None = None
 
     async def handle_message(self, from_agent: str, content: str) -> None:
         """Run the script with *content* on stdin and route stdout back."""
@@ -92,6 +97,14 @@ class ScriptBridge:
             self._record_error(f"Failed to spawn subprocess: {exc}")
             return
 
+        # Capture children RSS before/after for peak memory delta.
+        # NOTE: ru_maxrss is a high-water mark across ALL waited-for children,
+        # not per-child.  The delta is only non-zero when this child sets a new
+        # peak — i.e. uses more RSS than any previous child in this process.
+        # Executions that stay below the prior peak will report delta=0 and
+        # _last_peak_rss_mb won't be updated.
+        pre_rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
+
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(input=content.encode()),
@@ -108,6 +121,16 @@ class ScriptBridge:
             )
             self._record_error(f"Script timed out after {self._timeout}s")
             return
+
+        # Calculate peak RSS delta from children.
+        post_rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        rss_delta = post_rusage.ru_maxrss - pre_rusage.ru_maxrss
+        if rss_delta > 0:
+            # macOS ru_maxrss is in bytes, Linux in KB — normalize to MB.
+            if platform.system() == "Darwin":
+                self._last_peak_rss_mb = rss_delta / (1024 * 1024)
+            else:
+                self._last_peak_rss_mb = rss_delta / 1024
 
         if proc.returncode != 0:
             stderr_text = stderr_bytes.decode(errors="replace").strip()
