@@ -61,11 +61,16 @@ class UserAgent:
     flag_value=-1,
     help="Re-run prompt in a loop. Optional: specify max iterations (omit for infinite).",
 )
+@click.option(
+    "-p", "--prompt", "initial_prompt", type=str, default=None,
+    help="Initial prompt to send to the entry agent (allows backgrounding).",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output.")
 def up(
     config_file: str | None,
     enable_watch: bool,
     loop_iterations: int | None,
+    initial_prompt: str | None,
     verbose: bool,
 ) -> None:
     """Start the agent team and enter the interactive REPL."""
@@ -75,7 +80,7 @@ def up(
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc
 
-    asyncio.run(_run_session(config, verbose, loop_iterations, enable_watch))
+    asyncio.run(_run_session(config, verbose, loop_iterations, enable_watch, initial_prompt))
 
 
 # ------------------------------------------------------------------ #
@@ -84,7 +89,11 @@ def up(
 
 
 async def _run_session(
-    config: LatticeConfig, verbose: bool, loop_iterations: int | None = None, enable_watch: bool = False
+    config: LatticeConfig,
+    verbose: bool,
+    loop_iterations: int | None = None,
+    enable_watch: bool = False,
+    initial_prompt: str | None = None,
 ) -> None:
     """Wire up all components and run the REPL until shutdown."""
     # 1. Create recorder
@@ -261,15 +270,18 @@ async def _run_session(
                 heartbeat,
                 recorder,
                 loop_iterations,
+                initial_prompt,
             )
         elif enable_watch:
             # Combined mode: run TUI with input bar
             shutdown_reason = await _watch_mode(
                 router, entry, all_agents, shutdown_event, heartbeat, recorder,
+                initial_prompt,
             )
         else:
             shutdown_reason = await _repl_loop(
                 router, entry, all_agents, shutdown_event, heartbeat,
+                initial_prompt,
             )
     finally:
         await mem_profiler.stop()
@@ -300,6 +312,7 @@ async def _repl_loop(
     agents: dict[str, LLMAgent | CLIBridge | ScriptBridge],
     shutdown_event: asyncio.Event,
     heartbeat: Heartbeat | None = None,
+    initial_prompt: str | None = None,
 ) -> str:
     """Read user input in a loop, dispatch to agents, handle commands.
 
@@ -307,6 +320,11 @@ async def _repl_loop(
     """
     if heartbeat is not None:
         await heartbeat.start()
+
+    # Send initial prompt if provided (e.g. via -p flag for backgrounding)
+    if initial_prompt:
+        click.echo(f"> {initial_prompt}")
+        await router.send("user", entry_agent, initial_prompt)
 
     reason = "user_shutdown"
 
@@ -371,6 +389,7 @@ async def _watch_mode(
     shutdown_event: asyncio.Event,
     heartbeat: Heartbeat | None,
     recorder: SessionRecorder,
+    initial_prompt: str | None = None,
 ) -> str:
     """Run the TUI with input bar instead of the REPL.
 
@@ -380,6 +399,10 @@ async def _watch_mode(
 
     if heartbeat is not None:
         await heartbeat.start()
+
+    # Send initial prompt before launching TUI
+    if initial_prompt:
+        await router.send("user", entry_agent, initial_prompt)
 
     # Create and run the TUI app
     app = WatchApp(
@@ -548,6 +571,7 @@ async def _loop_mode(
     heartbeat: Heartbeat | None,
     recorder: SessionRecorder,
     loop_iterations: int,
+    initial_prompt: str | None = None,
 ) -> tuple[str, int]:
     """Run the prompt in a loop with fresh context each iteration.
 
@@ -560,18 +584,20 @@ async def _loop_mode(
         heartbeat: Optional heartbeat monitor
         recorder: Session recorder
         loop_iterations: Max iterations (-1 for infinite loop)
+        initial_prompt: Optional prompt (skips interactive input if provided)
 
     Returns:
         Tuple of (shutdown reason string, loop count)
     """
-    # Get initial prompt from user
-    click.echo("Enter prompt for loop (this prompt will be re-run each iteration):")
-    try:
-        initial_prompt = await asyncio.get_event_loop().run_in_executor(
-            None, _read_input,
-        )
-    except EOFError:
-        return ("ctrl_c", 0)
+    # Use provided prompt or ask interactively
+    if initial_prompt is None:
+        click.echo("Enter prompt for loop (this prompt will be re-run each iteration):")
+        try:
+            initial_prompt = await asyncio.get_event_loop().run_in_executor(
+                None, _read_input,
+            )
+        except EOFError:
+            return ("ctrl_c", 0)
 
     initial_prompt = initial_prompt.strip()
     if not initial_prompt:
