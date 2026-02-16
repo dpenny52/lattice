@@ -29,7 +29,7 @@ from lattice.memory_monitor import MemoryMonitor
 from lattice.pidfile import remove_pidfile, write_pidfile
 from lattice.router.router import Router
 from lattice.session.models import LoopBoundaryEvent
-from lattice.session.recorder import SessionRecorder
+from lattice.session.recorder import EndReason, SessionRecorder
 from lattice.shutdown import ShutdownManager
 
 # ------------------------------------------------------------------ #
@@ -92,20 +92,20 @@ def _install_siginfo_handlers(
             ("sa_flags", ctypes.c_int),
         ]
 
-    refs: list[_HandlerFunc] = []  # prevent GC of C function pointers
+    refs: list[object] = []  # prevent GC of C function pointers
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         sig_value = sig.value
 
-        def _make(sv: int) -> _HandlerFunc:
+        def _make(sv: int) -> object:
             def _handler(
                 _signum: int, info: object, _ctx: object,
             ) -> None:
                 _signal_sender_info.clear()
                 if info:
-                    _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore[union-attr]
-                    _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore[union-attr]
-                    _signal_sender_info["code"] = info.contents.si_code  # type: ignore[union-attr]
+                    _signal_sender_info["pid"] = info.contents.si_pid  # type: ignore[attr-defined]
+                    _signal_sender_info["uid"] = info.contents.si_uid  # type: ignore[attr-defined]
+                    _signal_sender_info["code"] = info.contents.si_code  # type: ignore[attr-defined]
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(
                         shutdown_callback, signal.Signals(sv).name,
@@ -401,7 +401,7 @@ async def _run_session(
     await mem_profiler.start()
 
     # Track why we're shutting down and loop count
-    shutdown_reason = "user_shutdown"
+    shutdown_reason: EndReason = "user_shutdown"
     loop_count = 0
 
     try:
@@ -459,7 +459,7 @@ async def _repl_loop(
     shutdown_event: asyncio.Event,
     heartbeat: Heartbeat | None = None,
     initial_prompt: str | None = None,
-) -> str:
+) -> EndReason:
     """Read user input in a loop, dispatch to agents, handle commands.
 
     Returns the shutdown reason string.
@@ -472,7 +472,7 @@ async def _repl_loop(
         click.echo(f"> {initial_prompt}")
         await router.send("user", entry_agent, initial_prompt)
 
-    reason = "user_shutdown"
+    reason: EndReason = "user_shutdown"
 
     # Bridge async shutdown_event → thread-safe cancel event so _read_input
     # (running in a thread) can be interrupted when SIGTERM arrives.
@@ -551,7 +551,7 @@ async def _watch_mode(
     heartbeat: Heartbeat | None,
     recorder: SessionRecorder,
     initial_prompt: str | None = None,
-) -> str:
+) -> EndReason:
     """Run the TUI with input bar instead of the REPL.
 
     Returns the shutdown reason string.
@@ -579,7 +579,7 @@ async def _watch_mode(
     # Run the app in a separate task so we can monitor heartbeat
     app_task = asyncio.create_task(_run_tui_app(app))
 
-    reason = "user_shutdown"
+    reason: EndReason = "user_shutdown"
 
     # Monitor for completion or external shutdown
     while not shutdown_event.is_set():
@@ -750,7 +750,7 @@ async def _loop_mode(
     recorder: SessionRecorder,
     loop_iterations: int,
     initial_prompt: str | None = None,
-) -> tuple[str, int]:
+) -> tuple[EndReason, int]:
     """Run the prompt in a loop with fresh context each iteration.
 
     Args:
@@ -785,7 +785,7 @@ async def _loop_mode(
     if heartbeat is not None:
         await heartbeat.start()
 
-    reason = "complete"
+    reason: EndReason = "complete"
     iteration = 1
 
     while not shutdown_event.is_set():

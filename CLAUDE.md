@@ -1,6 +1,6 @@
 # Lattice
 
-**Always run the linter before committing:** `.venv/bin/ruff check src/ tests/` — fix any errors before pushing.
+**Always run the linter and type checker before committing:** `.venv/bin/ruff check src/ tests/` and `.venv/bin/mypy src/` — fix any errors before pushing.
 
 Declarative multi-agent orchestration CLI. Define agent teams in YAML, run them with `lattice up`, observe with `lattice watch`, debug with `lattice replay`.
 

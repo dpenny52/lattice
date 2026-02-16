@@ -26,13 +26,14 @@ def write_pidfile(session_id: str, team: str) -> Path:
     return pidfile
 
 
-def read_pidfile() -> dict | None:
+def read_pidfile() -> dict[str, object] | None:
     """Read and return pidfile contents, or None if not found."""
     pidfile = PIDFILE_DIR / PIDFILE_NAME
     if not pidfile.exists():
         return None
     try:
-        return json.loads(pidfile.read_text())
+        result: dict[str, object] = json.loads(pidfile.read_text())
+        return result
     except (json.JSONDecodeError, OSError):
         return None
 

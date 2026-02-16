@@ -348,7 +348,7 @@ class WatchApp(App[None]):
         state = "shown" if self.show_tools else "hidden"
         self.notify(f"Tool calls {state} (press t to toggle)", timeout=3)
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Override quit action to trigger graceful shutdown in combined mode."""
         if self.enable_input and self.shutdown_event is not None:
             # Signal graceful shutdown instead of immediate exit

@@ -13,7 +13,7 @@ from lattice.agent.llm_agent import LLMAgent
 from lattice.agent.script_bridge import ScriptBridge
 from lattice.heartbeat import Heartbeat
 from lattice.router.router import Router
-from lattice.session.recorder import SessionRecorder
+from lattice.session.recorder import EndReason, SessionRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class ShutdownManager:
         self._start_time = time.monotonic()
         self._loop_count = loop_count
 
-    async def execute(self, reason: str) -> None:
+    async def execute(self, reason: EndReason) -> None:
         """Run the full shutdown sequence."""
         await self._signal()
         drained = await self._drain()
@@ -134,7 +134,7 @@ class ShutdownManager:
     # Step 4: CLOSE
     # ------------------------------------------------------------------ #
 
-    async def _close(self, reason: str) -> None:
+    async def _close(self, reason: EndReason) -> None:
         """Shutdown agents, write session_end, print summary."""
         # Shutdown all agents that weren't already handled in _kill.
         for name, agent in self._all_agents.items():

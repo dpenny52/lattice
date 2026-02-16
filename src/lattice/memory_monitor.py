@@ -123,7 +123,7 @@ def _get_available_mb_macos() -> float | None:
         available_pages = (
             stats.free_count + stats.inactive_count + stats.purgeable_count
         )
-        return (available_pages * page_size) / (1024 * 1024)
+        return float((available_pages * page_size) / (1024 * 1024))
     except Exception:
         return None
 
@@ -193,7 +193,7 @@ def _get_pid_rss_mb_macos(pid: int) -> float | None:
         ret = _libc.proc_pidinfo(pid, _PROC_PIDTASKINFO, 0, ctypes.byref(info), size)
         if ret <= 0:
             return None
-        return info.pti_resident_size / (1024 * 1024)
+        return float(info.pti_resident_size / (1024 * 1024))
     except Exception:
         return None
 
