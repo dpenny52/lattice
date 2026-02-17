@@ -4,12 +4,6 @@ Declarative multi-agent orchestration CLI. Define agent teams in YAML, run them 
 
 ![lattice watch TUI](docs/watch-tui.png)
 
-## Install
-
-```bash
-uv pip install lattice-cli
-```
-
 ## Quick Start
 
 ```bash
