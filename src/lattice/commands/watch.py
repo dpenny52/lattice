@@ -17,8 +17,6 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Header, Input, Label, Static
 
-from lattice.constants import SYSTEM_SENDER
-
 # ------------------------------------------------------------------ #
 # Data models
 # ------------------------------------------------------------------ #
@@ -449,16 +447,8 @@ class WatchApp(App[None]):
             )
             self.messages.append(msg)
             self.stats.message_count += 1
-
-            # Heartbeat responses routed as __system__ → user are already
-            # shown as agent_response events — skip to avoid duplicates.
-            if from_agent == SYSTEM_SENDER and to_agent == "user":
-                return
-
-            display_content = content.replace("\n", " ")
-            self._add_event_line(
-                f"[blue]Message[/blue]: {from_agent} → {to_agent}: {display_content}"
-            )
+            # Agent output already shows via cli_text_chunk / agent_response.
+            # Message Flow panel tracks routing. No event line needed.
 
         elif event_type == "llm_call_start":
             agent_name = event_dict["agent"]
