@@ -37,8 +37,11 @@ _SIGTERM_WAIT = 3.0
 #: Maximum bytes per JSONL line from subprocess stdout (1 MB).
 _MAX_LINE_BYTES = 1_048_576
 
-#: Env vars stripped from CLI subprocesses so they use subscription auth.
-_STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
+#: Env vars stripped from Claude CLI subprocesses so they use subscription auth.
+_CLAUDE_STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
+
+#: Env vars stripped from Codex CLI (keeps OPENAI_API_KEY — Codex needs it).
+_CODEX_STRIPPED_ENV_KEYS = {"ANTHROPIC_API_KEY", "GOOGLE_API_KEY"}
 
 #: Max V8 heap size (MB) for Node.js CLI subprocesses (e.g. Claude CLI).
 #: Prevents a single agent from OOM-killing the entire process tree.
@@ -347,7 +350,9 @@ class CLIBridge:
             # instead of accidentally hitting the API on the user's key.
             # Cap Node.js V8 heap to prevent OOM-killing the process tree.
             cli_env = {
-                k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS
+                k: v
+                for k, v in os.environ.items()
+                if k not in _CLAUDE_STRIPPED_ENV_KEYS
             }
             node_opts = cli_env.get("NODE_OPTIONS", "")
             if "--max-old-space-size" not in node_opts:
@@ -714,11 +719,15 @@ class CLIBridge:
                     "--dangerously-bypass-approvals-and-sandbox",
                 ]
 
-            # Strip LLM API keys so the CLI uses subscription auth.
+            # Strip non-OpenAI API keys.
             # Codex is a Rust binary — no Node.js heap cap needed.
+            # `codex exec` reads CODEX_API_KEY (not OPENAI_API_KEY), so
+            # forward OPENAI_API_KEY as CODEX_API_KEY if not already set.
             cli_env = {
-                k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS
+                k: v for k, v in os.environ.items() if k not in _CODEX_STRIPPED_ENV_KEYS
             }
+            if "CODEX_API_KEY" not in cli_env and "OPENAI_API_KEY" in cli_env:
+                cli_env["CODEX_API_KEY"] = cli_env["OPENAI_API_KEY"]
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
