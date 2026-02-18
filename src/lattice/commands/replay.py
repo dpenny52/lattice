@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +127,7 @@ def _extract_metadata(file_path: Path, events: list[SessionEvent]) -> SessionMet
     """Extract session metadata from parsed events."""
     session_id = "unknown"
     team = "unknown"
-    start_ts = datetime.now()
+    start_ts = datetime.now(tz=UTC)
     end_ts: datetime | None = None
     duration_ms: int | None = None
     message_count = 0
