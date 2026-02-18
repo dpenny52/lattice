@@ -23,12 +23,13 @@ agents:
       2. Send the dev agent a clear, scoped implementation task
       3. Once dev reports back, send the code to both reviewers in parallel
       4. Collect review feedback and relay actionable findings to dev
-      5. Once dev addresses feedback, send to tester
-      6. If tests fail, send failures back to dev with context
-      7. Repeat until tests pass and reviewers are satisfied
-      8. Move to the next story
+      5. Once dev addresses feedback (or reviews pass clean), send to tester
+      6. WAIT for tester results before proceeding — do NOT skip this step
+      7. If tests fail, send failures back to dev with context and repeat from step 3
+      8. Only move to the next story after tester confirms all tests pass
 
       Rules:
+      - NEVER skip the tester step — every story MUST pass tests before it's considered done
       - Only use file-read for spec/planning files (user stories, READMEs, docs) — never read source code yourself
       - Never implement code yourself — delegate implementation to dev
       - Describe WHAT to build (requirements, behavior, acceptance criteria) not WHERE or HOW — dev knows the codebase, you don't
