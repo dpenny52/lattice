@@ -174,6 +174,50 @@ def _make_mock_claude_process(
     return proc, stdout
 
 
+def _make_mock_codex_process(
+    text_response: str = "",
+    returncode: int = 0,
+) -> tuple[MagicMock, MockAsyncStdout]:
+    """Create a mock Codex CLI process that streams a text response.
+
+    Returns (proc, stdout) so caller can feed additional events if needed.
+    """
+    stdout = MockAsyncStdout()
+
+    proc = MagicMock()
+    proc.returncode = None
+    proc.stdout = stdout
+    proc.stderr = MagicMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock(return_value=returncode)
+
+    # Pre-feed the text response if provided.
+    if text_response:
+        stdout.feed(
+            json.dumps(
+                {
+                    "type": "thread.started",
+                    "thread_id": "thread-test-123",
+                }
+            ).encode()
+            + b"\n"
+        )
+        stdout.feed(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": text_response,
+                    },
+                }
+            ).encode()
+            + b"\n"
+        )
+
+    return proc, stdout
+
+
 def _capture_events(recorder: SessionRecorder) -> list[Any]:
     """Monkey-patch recorder to capture all events."""
     events: list[Any] = []
@@ -1909,6 +1953,433 @@ class TestClaudeStreaming:
         captured = capsys.readouterr()
         assert "No agents configured" not in captured.err
         assert "Agents: 1" in captured.out
+
+
+# ------------------------------------------------------------------ #
+# Pre-flight memory gate
+# ------------------------------------------------------------------ #
+
+
+class TestCodexAdapter:
+    """Tests for the Codex CLI adapter mode."""
+
+    async def test_codex_subprocess_invocation(self, tmp_path: Path) -> None:
+        """Codex adapter runs codex exec with correct args."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router,
+            recorder,
+            cli_type="codex",
+            on_response=_async_capture(captured),
+        )
+
+        proc, stdout = _make_mock_codex_process(text_response="Analysis complete")
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            return_value=proc,
+        ) as mock_exec:
+            task = asyncio.create_task(bridge.handle_message("user", "analyze this"))
+            await asyncio.sleep(0.01)
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        mock_exec.assert_called_once()
+        call_args = mock_exec.call_args
+        args = call_args[0]
+        assert args[0] == "codex"
+        assert "exec" in args
+        assert "--json" in args
+        assert "--dangerously-bypass-approvals-and-sandbox" in args
+
+        # Verify prompt includes role and message.
+        prompt = args[2]  # codex exec <prompt>
+        assert "You are a test CLI agent." in prompt
+        assert "Task from user: analyze this" in prompt
+
+        assert captured == ["Analysis complete"]
+        recorder.close()
+
+    async def test_codex_not_found(self, tmp_path: Path) -> None:
+        """Handles missing codex binary gracefully."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=FileNotFoundError("codex not found"),
+        ):
+            await bridge.handle_message("user", "do thing")
+
+        error_events = [e for e in events if isinstance(e, ErrorEvent)]
+        assert any("not found" in e.error for e in error_events)
+        recorder.close()
+
+    async def test_codex_nonzero_exit(self, tmp_path: Path) -> None:
+        """Handles non-zero exit from codex CLI."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"API error")
+        mock_proc.wait = AsyncMock(return_value=1)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "do thing"))
+            await asyncio.sleep(0.01)
+            stdout.close()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        error_events = [e for e in events if isinstance(e, ErrorEvent)]
+        assert any("exited with code 1" in e.error for e in error_events)
+        recorder.close()
+
+    async def test_codex_start_is_noop(self, tmp_path: Path) -> None:
+        """start() is a no-op for Codex adapter."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await bridge.start()
+            mock_exec.assert_not_called()
+
+        assert bridge._started is True
+        recorder.close()
+
+    async def test_codex_shutdown_is_noop(self, tmp_path: Path) -> None:
+        """Codex adapter shutdown doesn't try to kill a process."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        await bridge.start()
+        await bridge.shutdown()
+        assert bridge._started is False
+        recorder.close()
+
+    async def test_codex_stream_agent_message(self, tmp_path: Path) -> None:
+        """item.completed with agent_message records CLITextChunkEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "test"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "Hello world"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        text_events = [e for e in events if isinstance(e, CLITextChunkEvent)]
+        assert len(text_events) == 1
+        assert text_events[0].text == "Hello world"
+        recorder.close()
+
+    async def test_codex_stream_command_execution(self, tmp_path: Path) -> None:
+        """item.completed with command_execution records CLIToolCallEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "run cmd"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "command_execution",
+                            "command": "ls -la",
+                            "aggregated_output": "total 42\n...",
+                        },
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        tool_events = [e for e in events if isinstance(e, CLIToolCallEvent)]
+        assert len(tool_events) == 1
+        assert tool_events[0].tool == "bash"
+        assert tool_events[0].args == {"command": "ls -la"}
+        recorder.close()
+
+    async def test_codex_stream_reasoning(self, tmp_path: Path) -> None:
+        """item.completed with reasoning records CLIThinkingEvent."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "think"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "reasoning",
+                            "text": "Let me analyze the problem",
+                        },
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        thinking_events = [e for e in events if isinstance(e, CLIThinkingEvent)]
+        assert len(thinking_events) == 1
+        assert thinking_events[0].content == "Let me analyze the problem"
+        recorder.close()
+
+    async def test_codex_stream_thread_id(self, tmp_path: Path) -> None:
+        """thread.started extracts and stores thread_id."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "first"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "thread.started",
+                        "thread_id": "thread-abc789",
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        assert bridge._codex_thread_id == "thread-abc789"
+        recorder.close()
+
+    async def test_codex_resume_uses_thread_id(self, tmp_path: Path) -> None:
+        """Follow-up messages use codex exec resume <thread_id>."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+
+        first_task_started = asyncio.Event()
+
+        # First subprocess with thread_id — blocks on stdout read.
+        stdout_1 = MockAsyncStdout()
+        mock_proc_1 = MagicMock()
+        mock_proc_1.returncode = None
+        mock_proc_1.stdout = stdout_1
+        mock_proc_1.stderr = MagicMock()
+        mock_proc_1.stderr.read = AsyncMock(return_value=b"")
+        mock_proc_1.wait = AsyncMock(return_value=0)
+
+        # Second subprocess (follow-up).
+        mock_proc_2, stdout_2 = _make_mock_codex_process(text_response="second")
+
+        call_count = 0
+        recorded_args: list[tuple[Any, ...]] = []
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            recorded_args.append(args)
+            if call_count == 1:
+                first_task_started.set()
+                return mock_proc_1
+            return mock_proc_2
+
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
+            # First message.
+            task_1 = asyncio.create_task(
+                bridge.handle_message("user", "first"),
+            )
+            await asyncio.wait_for(
+                first_task_started.wait(),
+                timeout=2.0,
+            )
+
+            # Second message (queues — agent is busy).
+            task_2 = asyncio.create_task(
+                bridge.handle_message("user", "second"),
+            )
+            await asyncio.wait_for(task_2, timeout=2.0)
+
+            # Let first task complete with thread_id.
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "thread.started",
+                        "thread_id": "thread-resume-test",
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout_1.feed(
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "first"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout_1.close()
+            stdout_2.close()
+
+            await asyncio.wait_for(task_1, timeout=2.0)
+
+        # Verify first call doesn't use resume.
+        first_call_args = recorded_args[0]
+        assert "resume" not in first_call_args
+
+        # Verify second call uses resume with thread_id.
+        second_call_args = recorded_args[1]
+        assert "resume" in second_call_args
+        resume_idx = second_call_args.index("resume")
+        assert second_call_args[resume_idx + 1] == "thread-resume-test"
+        recorder.close()
+
+    async def test_codex_turn_failed(self, tmp_path: Path) -> None:
+        """turn.failed records an error event."""
+        router, recorder = _make_router(tmp_path)
+        bridge = _make_bridge(router, recorder, cli_type="codex")
+        events = _capture_events(recorder)
+
+        stdout = MockAsyncStdout()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            task = asyncio.create_task(bridge.handle_message("user", "fail"))
+            await asyncio.sleep(0.01)
+
+            stdout.feed(
+                json.dumps(
+                    {
+                        "type": "turn.failed",
+                        "error": {"message": "Rate limit exceeded"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            stdout.close()
+
+            await asyncio.wait_for(task, timeout=2.0)
+
+        error_events = [e for e in events if isinstance(e, ErrorEvent)]
+        assert any("turn failed" in e.error.lower() for e in error_events)
+        assert any("Rate limit exceeded" in e.error for e in error_events)
+        recorder.close()
+
+    async def test_codex_message_queuing(self, tmp_path: Path) -> None:
+        """Codex adapter reuses same busy/queue pattern as Claude."""
+        router, recorder = _make_router(tmp_path)
+        captured: list[str] = []
+        bridge = _make_bridge(
+            router,
+            recorder,
+            cli_type="codex",
+            on_response=_async_capture(captured),
+        )
+
+        call_count = 0
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            resp = f"response {call_count}"
+            proc, stdout = _make_mock_codex_process(text_response=resp)
+            stdout.close()
+            return proc
+
+        patch_exec = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+        with patch_exec:
+            tasks = [
+                asyncio.create_task(bridge.handle_message("user", f"task {i}"))
+                for i in range(1, 5)
+            ]
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+
+        response_texts = [c for c in captured if c.startswith("response")]
+        expected = [
+            "response 1",
+            "response 2",
+            "response 3",
+            "response 4",
+        ]
+        assert response_texts == expected
+        recorder.close()
 
 
 # ------------------------------------------------------------------ #

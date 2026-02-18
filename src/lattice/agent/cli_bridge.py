@@ -54,9 +54,11 @@ class CLIBridge:
 
     Satisfies the ``Router.Agent`` protocol via ``handle_message``.
 
-    Two modes of operation:
+    Three modes of operation:
 
     * **Claude adapter** (``cli_type="claude"``): spawns a new ``claude``
+      subprocess per task, collects JSON output, and routes results.
+    * **Codex adapter** (``cli_type="codex"``): spawns a new ``codex``
       subprocess per task, collects JSON output, and routes results.
     * **Custom CLI** (``command`` specified): spawns a long-running process
       and communicates over stdin/stdout using the Lattice JSONL protocol.
@@ -99,21 +101,24 @@ class CLIBridge:
         self._claude_busy_lock = asyncio.Lock()
         self._claude_conversation_id: str | None = None
 
-        # Per-agent memory profiling: current Claude subprocess PID.
+        # Codex adapter: thread state for resume.
+        self._codex_thread_id: str | None = None
+
+        # Per-agent memory profiling: current CLI subprocess PID.
         self._current_claude_pid: int | None = None
 
     @property
     def current_subprocess_pid(self) -> int | None:
         """PID of the currently running subprocess, if any.
 
-        For Claude adapter: the PID of the active ``claude`` subprocess.
+        For Claude/Codex adapter: the PID of the active CLI subprocess.
         For custom CLI: the PID of the long-running process.
         Returns ``None`` when no subprocess is running.
         """
         # Custom CLI — long-running process.
         if self._process is not None and self._process.returncode is None:
             return self._process.pid
-        # Claude adapter — per-task subprocess.
+        # Per-task CLI adapter (Claude/Codex).
         return self._current_claude_pid
 
     # ------------------------------------------------------------------ #
@@ -130,8 +135,8 @@ class CLIBridge:
         if self._started:
             return
 
-        if self._cli_type == "claude":
-            # Claude adapter doesn't use a long-running process.
+        if self._cli_type in ("claude", "codex"):
+            # Per-task adapters don't use a long-running process.
             self._started = True
             return
 
@@ -152,7 +157,7 @@ class CLIBridge:
 
     async def shutdown(self) -> None:
         """Graceful shutdown: signal -> wait -> SIGTERM -> SIGKILL."""
-        if self._cli_type == "claude":
+        if self._cli_type in ("claude", "codex"):
             self._started = False
             return
 
@@ -203,7 +208,7 @@ class CLIBridge:
         if not self._started:
             await self.start()
 
-        if self._cli_type == "claude":
+        if self._cli_type in ("claude", "codex"):
             # Atomically check busy state to prevent race conditions.
             async with self._claude_busy_lock:
                 if self._claude_busy:
@@ -241,7 +246,10 @@ class CLIBridge:
             self._recorder.record(
                 AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
             )
-            await self._handle_claude_task(from_agent, content)
+            if self._cli_type == "claude":
+                await self._handle_claude_task(from_agent, content)
+            else:
+                await self._handle_codex_task(from_agent, content)
             self._recorder.record(
                 AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
             )
@@ -617,10 +625,420 @@ class CLIBridge:
             self._recorder.record(
                 AgentStartEvent(ts="", seq=0, agent=self.name, agent_type="cli")
             )
-            await self._handle_claude_task(from_agent, content, is_followup=True)
+            if self._cli_type == "claude":
+                await self._handle_claude_task(from_agent, content, is_followup=True)
+            elif self._cli_type == "codex":
+                await self._handle_codex_task(from_agent, content, is_followup=True)
             self._recorder.record(
                 AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
             )
+
+    # ------------------------------------------------------------------ #
+    # Codex adapter
+    # ------------------------------------------------------------------ #
+
+    async def _handle_codex_task(
+        self, from_agent: str, content: str, *, is_followup: bool = False
+    ) -> None:
+        """Run a single Codex CLI invocation for this task.
+
+        Args:
+            from_agent: Name of the agent sending the message.
+            content: Message content.
+            is_followup: If True, use resume to preserve conversation context.
+        """
+        self._claude_busy = True
+        try:
+            await self._run_codex_task(from_agent, content, is_followup=is_followup)
+        finally:
+            self._current_claude_pid = None
+            self._claude_busy = False
+
+    async def _run_codex_task(
+        self, from_agent: str, content: str, *, is_followup: bool = False
+    ) -> None:
+        """Inner implementation of a Codex CLI task (called by _handle_codex_task)."""
+        # Pre-flight memory check — refuse to spawn if system is too low.
+        from lattice.memory_monitor import get_available_mb
+
+        available = get_available_mb()
+        if available is not None and available < _MIN_AVAILABLE_MB:
+            error_msg = (
+                f"Agent '{self.name}' — not enough memory to spawn CLI subprocess. "
+                f"Available: {available:.0f} MB, required: {_MIN_AVAILABLE_MB} MB. "
+                f"Close other applications to free memory."
+            )
+            click.echo(error_msg, err=True)
+            logger.error("%s: %s", self.name, error_msg)
+            self._recorder.record(
+                ErrorEvent(
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    error=f"Insufficient memory: {available:.0f}MB available",
+                    retrying=False,
+                    context="subprocess",
+                )
+            )
+            if self._on_response:
+                msg = (
+                    f"[{self.name}: insufficient memory ({available:.0f} MB available)]"
+                )
+                await self._on_response(msg)
+            return
+
+        # Include role only in the first message; follow-ups use
+        # the preserved conversation.
+        if is_followup:
+            prompt = f"Task from {from_agent}: {content}"
+        else:
+            prompt = f"{self._role}\n\nTask from {from_agent}: {content}"
+
+        try:
+            if is_followup and self._codex_thread_id is not None:
+                cmd_args = [
+                    "codex",
+                    "exec",
+                    "resume",
+                    self._codex_thread_id,
+                    prompt,
+                    "--json",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                ]
+            else:
+                cmd_args = [
+                    "codex",
+                    "exec",
+                    prompt,
+                    "--json",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                ]
+
+            # Strip LLM API keys so the CLI uses subscription auth.
+            # Codex is a Rust binary — no Node.js heap cap needed.
+            cli_env = {
+                k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS
+            }
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=_MAX_LINE_BYTES,
+                env=cli_env,
+                start_new_session=True,
+            )
+            self._current_claude_pid = proc.pid
+        except FileNotFoundError:
+            error_msg = (
+                f"Agent '{self.name}' — Codex CLI not found.\n"
+                "Make sure 'codex' is installed and on your PATH.\n"
+                "Install: npm install -g @openai/codex"
+            )
+            click.echo(error_msg, err=True)
+            record_error(
+                self._recorder,
+                self.name,
+                "Codex CLI not found",
+                logger=logger,
+            )
+            return
+        except OSError as exc:
+            error_msg = f"Agent '{self.name}' — failed to spawn Codex CLI: {exc}"
+            click.echo(error_msg, err=True)
+            logger.error("%s: failed to spawn Codex CLI: %s", self.name, exc)
+            self._recorder.record(
+                ErrorEvent(
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    error=f"Failed to spawn Codex CLI: {exc}",
+                    retrying=False,
+                    context="subprocess",
+                )
+            )
+            return
+
+        # Stream stdout and parse events as they arrive.
+        result_text = await self._stream_codex_output(proc)
+
+        # Drain any remaining stdout/stderr so the subprocess can exit.
+        try:
+            if proc.stdout and not proc.stdout.at_eof():
+                await proc.stdout.read()
+        except Exception:
+            pass
+        stderr_bytes = b""
+        try:
+            if proc.stderr:
+                stderr_bytes = await proc.stderr.read()
+        except Exception:
+            pass
+
+        # Wait for process to complete.
+        returncode = await proc.wait()
+
+        if returncode != 0:
+            stderr_text = stderr_bytes.decode(errors="replace").strip()
+
+            # Show last 5 lines of stderr for user-friendly output
+            stderr_preview = format_stderr_preview(stderr_text)
+
+            error_msg = f"Agent '{self.name}' exited with code {returncode}."
+            if stderr_preview:
+                error_msg += f" Stderr:\n  {stderr_preview}"
+
+            click.echo(error_msg, err=True)
+
+            # Record full stderr in session log
+            full_error = (
+                f"Codex CLI exited with code {returncode}: {stderr_text[:2048]}"
+            )
+            record_error(self._recorder, self.name, full_error, logger=logger)
+            return
+
+        if result_text:
+            if self._on_response:
+                await self._on_response(result_text)
+            # Route the result back to the sender so the conversation continues.
+            # Skip routing back to "user" — that's handled by on_response.
+            if from_agent != "user":
+                await self._router.send(self.name, from_agent, result_text)
+
+    async def _stream_codex_output(self, proc: asyncio.subprocess.Process) -> str:
+        """Stream and parse JSON events from Codex CLI stdout.
+
+        Returns the final result text (last agent_message).
+        """
+        if proc.stdout is None:
+            return ""
+
+        result_text = ""
+        partial_line = ""
+
+        try:
+            while True:
+                try:
+                    line_bytes = await proc.stdout.readline()
+                except ValueError:
+                    # Line exceeded StreamReader buffer limit — skip and keep reading.
+                    logger.warning(
+                        "%s: stdout line exceeded buffer limit, skipping",
+                        self.name,
+                    )
+                    partial_line = ""
+                    continue
+
+                if not line_bytes:
+                    # EOF
+                    break
+
+                if len(line_bytes) > _MAX_LINE_BYTES:
+                    logger.warning(
+                        "%s: stdout line exceeds %d bytes, skipping",
+                        self.name,
+                        _MAX_LINE_BYTES,
+                    )
+                    continue
+
+                decoded = line_bytes.decode(errors="replace")
+                line_str = (partial_line + decoded).strip()
+                partial_line = ""
+
+                if not line_str:
+                    continue
+
+                # Try to parse as JSON.
+                try:
+                    event = json.loads(line_str)
+                except json.JSONDecodeError:
+                    if decoded.endswith("\n"):
+                        logger.warning(
+                            "%s: malformed JSON from Codex stdout: %s",
+                            self.name,
+                            line_str[:200],
+                        )
+                        continue
+                    else:
+                        partial_line = line_str
+                        continue
+
+                # Dispatch the parsed event.
+                result_text = await self._dispatch_codex_event(event, result_text)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("%s: error reading Codex stdout: %s", self.name, exc)
+
+        return result_text
+
+    async def _dispatch_codex_event(
+        self,
+        event: dict[str, object],
+        current_result: str,
+    ) -> str:
+        """Process a single streaming event from Codex CLI.
+
+        Codex CLI ``--json`` emits these top-level event types:
+
+        * ``thread.started`` — init event with thread_id.
+        * ``item.started``   — item begins (no-op).
+        * ``item.completed`` — item finished; dispatched to
+          ``_dispatch_codex_item``.
+        * ``turn.completed`` — turn finished (no-op, usage stats).
+        * ``turn.failed``    — turn failed with error.
+        * ``error``          — top-level error event.
+
+        Returns updated result text.
+        """
+        event_type = event.get("type")
+
+        if event_type == "thread.started":
+            # Init event — extract thread_id for resume.
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                self._codex_thread_id = thread_id
+            self._recorder.record(
+                CLIProgressEvent(ts="", seq=0, agent=self.name, status="initialized")
+            )
+
+        elif event_type == "item.completed":
+            # Completed item — dispatch to item handler.
+            item = event.get("item")
+            if isinstance(item, dict):
+                current_result = self._dispatch_codex_item(item, current_result)
+
+        elif event_type == "turn.failed":
+            error = event.get("error")
+            error_msg = ""
+            if isinstance(error, dict):
+                error_msg = str(error.get("message", ""))
+            elif isinstance(error, str):
+                error_msg = error
+            if error_msg:
+                logger.error("%s: Codex turn failed: %s", self.name, error_msg)
+                self._recorder.record(
+                    ErrorEvent(
+                        ts="",
+                        seq=0,
+                        agent=self.name,
+                        error=f"Codex turn failed: {error_msg}",
+                        retrying=False,
+                        context="subprocess",
+                    )
+                )
+
+        elif event_type == "error":
+            error_msg = str(event.get("message", ""))
+            if error_msg:
+                logger.error("%s: Codex error: %s", self.name, error_msg)
+                self._recorder.record(
+                    ErrorEvent(
+                        ts="",
+                        seq=0,
+                        agent=self.name,
+                        error=f"Codex error: {error_msg}",
+                        retrying=False,
+                        context="subprocess",
+                    )
+                )
+
+        # Ignore item.started, turn.completed, and unknown types.
+        return current_result
+
+    def _dispatch_codex_item(
+        self,
+        item: dict[str, object],
+        current_result: str,
+    ) -> str:
+        """Process a single completed item from Codex CLI.
+
+        Maps Codex item types to session events:
+
+        * ``agent_message``      → ``CLITextChunkEvent`` (last one = final result).
+        * ``reasoning``          → ``CLIThinkingEvent``.
+        * ``command_execution``  → ``CLIToolCallEvent`` (tool="bash").
+        * ``file_change``        → ``CLIToolCallEvent`` (tool="file_change").
+        * ``mcp_tool_call``      → ``CLIToolCallEvent`` (tool from item).
+        * ``error``              → ``ErrorEvent``.
+
+        Returns updated result text.
+        """
+        item_type = item.get("type")
+
+        if item_type == "agent_message":
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                self._recorder.record(
+                    CLITextChunkEvent(ts="", seq=0, agent=self.name, text=text)
+                )
+                current_result = text
+
+        elif item_type == "reasoning":
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                self._recorder.record(
+                    CLIThinkingEvent(ts="", seq=0, agent=self.name, content=text)
+                )
+
+        elif item_type == "command_execution":
+            command = str(item.get("command", ""))
+            self._recorder.record(
+                CLIToolCallEvent(
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    tool="bash",
+                    args={"command": command},
+                )
+            )
+
+        elif item_type == "file_change":
+            changes = item.get("changes", [])
+            if not isinstance(changes, list):
+                changes = []
+            self._recorder.record(
+                CLIToolCallEvent(
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    tool="file_change",
+                    args={"changes": changes},
+                )
+            )
+
+        elif item_type == "mcp_tool_call":
+            tool = str(item.get("tool", "mcp"))
+            arguments = item.get("arguments", {})
+            if not isinstance(arguments, dict):
+                arguments = {}
+            self._recorder.record(
+                CLIToolCallEvent(
+                    ts="",
+                    seq=0,
+                    agent=self.name,
+                    tool=tool,
+                    args=arguments,
+                )
+            )
+
+        elif item_type == "error":
+            error_msg = str(item.get("text", ""))
+            if error_msg:
+                self._recorder.record(
+                    ErrorEvent(
+                        ts="",
+                        seq=0,
+                        agent=self.name,
+                        error=f"Codex item error: {error_msg}",
+                        retrying=False,
+                        context="subprocess",
+                    )
+                )
+
+        return current_result
 
     # ------------------------------------------------------------------ #
     # Custom CLI (long-running JSONL process)

@@ -43,7 +43,7 @@ agents:
 
   dev:
     type: cli
-    cli: claude
+    cli: codex
     role: |
       You are a senior Python developer working on the Lattice project.
       Follow existing code patterns and conventions in the codebase.
