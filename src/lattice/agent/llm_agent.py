@@ -215,17 +215,18 @@ class LLMAgent:
         """Return an emoji representing the agent's current mood.
 
         Mood is derived from ``self._state``:
-        - ``"idle"``      → 😴 (sleeping)
         - ``"thinking"``  → 🤔 (thinking)
+        - ``"talking"``   → 💬 (talking / text response)
+        - ``"acting"``    → 🔧 (executing tools)
         - ``"error"``     → 😡 (frustrated)
-        - ``"success"``   → 😊 (happy)
+        - anything else   → 😴 (sleeping / idle)
         """
         return {
-            "idle": "\U0001f634",  # 😴
             "thinking": "\U0001f914",  # 🤔
+            "talking": "\U0001f4ac",  # 💬
+            "acting": "\U0001f527",  # 🔧
             "error": "\U0001f621",  # 😡
-            "success": "\U0001f60a",  # 😊
-        }.get(self._state, "\U0001f634")
+        }.get(self._state, "\U0001f634")  # default: 😴
 
     # ------------------------------------------------------------------ #
     # Internal loop
@@ -256,7 +257,7 @@ class LLMAgent:
 
             if not response.tool_calls:
                 # Plain text response -- agent is done for this turn.
-                self._state = "success"
+                self._state = "talking"
                 if response.content:
                     thread.append({"role": "assistant", "content": response.content})
                     self._recorder.record(
@@ -289,6 +290,7 @@ class LLMAgent:
             thread.append(assistant_msg)
 
             # Execute each tool call and feed results back.
+            self._state = "acting"
             for tc in response.tool_calls:
                 result = await self._tools.execute(tc.name, tc.arguments)
                 thread.append(
@@ -299,6 +301,7 @@ class LLMAgent:
                         "content": result,
                     }
                 )
+            self._state = "thinking"
         else:
             self._state = "error"
             logger.warning(

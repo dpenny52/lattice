@@ -495,10 +495,10 @@ class TestComputeMood:
 
         assert observed_mood[0] == "\U0001f914"  # 🤔
 
-    async def test_mood_success_after_text_response(
+    async def test_mood_idle_after_text_response(
         self, router: Router, recorder: SessionRecorder
     ) -> None:
-        """After successful text response, mood transitions to 😊 then idle 😴."""
+        """After text response, agent resets to idle 😴."""
         provider = MockProvider(
             [LLMResponse(content="Hello!", usage=TokenUsage(10, 5))]
         )
@@ -542,10 +542,10 @@ class TestComputeMood:
         agent._state = "banana"
         assert agent._compute_mood() == "\U0001f634"  # 😴
 
-    async def test_mood_success_captured_before_idle_reset(
+    async def test_mood_talking_captured_before_idle_reset(
         self, router: Router, recorder: SessionRecorder
     ) -> None:
-        """The on_response callback fires while agent is still in success state."""
+        """The on_response callback fires while agent is in talking state."""
         captured_mood: list[str] = []
 
         async def spy_callback(content: str) -> None:
@@ -568,5 +568,55 @@ class TestComputeMood:
 
         await agent.handle_message("user", "hi")
 
-        # Callback fires after success state is set, before idle reset.
-        assert captured_mood[0] == "\U0001f60a"  # 😊
+        # Callback fires in talking state, before idle reset.
+        assert captured_mood[0] == "\U0001f4ac"  # 💬
+
+    async def test_mood_acting_during_tool_execution(
+        self, router: Router, recorder: SessionRecorder
+    ) -> None:
+        """During tool execution, mood should be 🔧."""
+        captured_mood: list[str] = []
+
+        # Provider returns a tool call, then a text response.
+        class ToolThenTextProvider:
+            def __init__(self) -> None:
+                self._call_count = 0
+
+            async def chat(
+                self,
+                messages: list[dict[str, Any]],
+                tools: list[dict[str, Any]],
+                model: str,
+                **kwargs: Any,
+            ) -> LLMResponse:
+                self._call_count += 1
+                if self._call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                id="tc1",
+                                name="send_message",
+                                arguments={"to": "agent-b", "message": "hi"},
+                            )
+                        ],
+                        usage=TokenUsage(10, 5),
+                    )
+                return LLMResponse(content="done", usage=TokenUsage(5, 2))
+
+        provider = ToolThenTextProvider()
+        agent = _make_agent(router, recorder, provider)
+        router.register("agent-a", agent)
+
+        # Patch tool execution to capture mood during acting.
+        original_execute = agent._tools.execute
+
+        async def spy_execute(name: str, arguments: dict[str, Any]) -> str:
+            captured_mood.append(agent._compute_mood())
+            return await original_execute(name, arguments)
+
+        agent._tools.execute = spy_execute  # type: ignore[assignment]
+
+        await agent.handle_message("user", "hi")
+
+        assert captured_mood[0] == "\U0001f527"  # 🔧
