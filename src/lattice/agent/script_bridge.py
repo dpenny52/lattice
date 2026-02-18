@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import platform
+import re
 import resource
 import shlex
 from collections.abc import Awaitable, Callable
@@ -41,7 +42,7 @@ class ScriptBridge:
         command: str,
         router: Router,
         recorder: SessionRecorder,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         on_response: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.name = name
@@ -68,37 +69,58 @@ class ScriptBridge:
                 AgentDoneEvent(ts="", seq=0, agent=self.name, reason="completed")
             )
 
+    # Shell metacharacters that require a shell interpreter.
+    _SHELL_META_RE = re.compile(r"[|&;<>(){}\$`!]|2>&1")
+
     async def _execute(self, from_agent: str, content: str) -> None:
         """Run the subprocess and handle the result."""
-        try:
-            args = shlex.split(self._command)
-        except ValueError as exc:
-            click.echo(f"Agent '{self.name}' — invalid command: {exc}", err=True)
-            self._record_error(f"Invalid command: {exc}")
-            return
+        needs_shell = self._SHELL_META_RE.search(self._command) is not None
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            click.echo(
-                f"Agent '{self.name}' — command not found: {args[0]}\n"
-                f"Make sure '{args[0]}' is installed and on your PATH.",
-                err=True,
-            )
-            self._record_error(f"Command not found: {args[0]}")
-            return
-        except OSError as exc:
-            click.echo(
-                f"Agent '{self.name}' — failed to spawn subprocess: {exc}",
-                err=True,
-            )
-            self._record_error(f"Failed to spawn subprocess: {exc}")
-            return
+        if needs_shell:
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    self._command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as exc:
+                click.echo(
+                    f"Agent '{self.name}' — failed to spawn subprocess: {exc}",
+                    err=True,
+                )
+                self._record_error(f"Failed to spawn subprocess: {exc}")
+                return
+        else:
+            try:
+                args = shlex.split(self._command)
+            except ValueError as exc:
+                click.echo(f"Agent '{self.name}' — invalid command: {exc}", err=True)
+                self._record_error(f"Invalid command: {exc}")
+                return
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except FileNotFoundError:
+                click.echo(
+                    f"Agent '{self.name}' — command not found: {args[0]}\n"
+                    f"Make sure '{args[0]}' is installed and on your PATH.",
+                    err=True,
+                )
+                self._record_error(f"Command not found: {args[0]}")
+                return
+            except OSError as exc:
+                click.echo(
+                    f"Agent '{self.name}' — failed to spawn subprocess: {exc}",
+                    err=True,
+                )
+                self._record_error(f"Failed to spawn subprocess: {exc}")
+                return
 
         # Capture children RSS before/after for peak memory delta.
         # NOTE: ru_maxrss is a high-water mark across ALL waited-for children,

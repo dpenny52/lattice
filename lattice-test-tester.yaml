@@ -1,0 +1,25 @@
+version: "1"
+
+team: test-tester
+description: Minimal lead + tester to verify script bridge shell support
+
+entry: lead
+
+agents:
+  lead:
+    model: anthropic/claude-haiku-4-5
+    role: |
+      You coordinate a single tester agent. When the user asks you to run tests,
+      send a message to the tester agent. Report the results back to the user.
+
+  tester:
+    type: script
+    command: .venv/bin/python -m pytest tests/ -v --tb=short 2>&1 | tail -80
+
+topology:
+  type: hub
+  coordinator: lead
+  workers: [tester]
+
+communication:
+  record: true
