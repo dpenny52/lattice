@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import click
+from rich.console import Group
+from rich.markdown import Markdown as RichMarkdown
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
@@ -40,6 +43,15 @@ class MessageLink:
     to_agent: str
     content: str
     completed: bool = False
+
+
+@dataclass
+class EventLine:
+    """A single event in the feed. Plain events use text only; content events
+    also carry markdown that gets rendered with Rich's Markdown renderer."""
+
+    text: str  # Rich-markup string (used as-is for plain, or as prefix for markdown)
+    markdown: str | None = None  # If set, rendered as markdown after the prefix
 
 
 @dataclass
@@ -109,7 +121,7 @@ class MessageFlowPanel(Static):
 class LatestPanel(VerticalScroll):
     """Bottom panel showing scrollable event tail."""
 
-    events: reactive[deque[str]] = reactive(deque, recompose=True)
+    events: reactive[deque[EventLine]] = reactive(deque, recompose=True)
     max_events: int = 100
 
     def compose(self) -> ComposeResult:
@@ -118,8 +130,17 @@ class LatestPanel(VerticalScroll):
         if not self.events:
             yield Label("Waiting for events...", classes="empty-state")
         else:
-            for event_line in self.events:
-                yield Label(event_line, classes="event-line", markup=True)
+            for event in self.events:
+                if event.markdown is not None:
+                    yield Static(
+                        Group(
+                            Text.from_markup(event.text),
+                            RichMarkdown(event.markdown),
+                        ),
+                        classes="event-line event-markdown",
+                    )
+                else:
+                    yield Label(event.text, classes="event-line", markup=True)
 
     def watch_events(self) -> None:
         """Auto-scroll to bottom when events change."""
@@ -129,10 +150,10 @@ class LatestPanel(VerticalScroll):
             lambda: self.call_after_refresh(self.scroll_end, animate=False)
         )
 
-    def add_event(self, event_str: str) -> None:
+    def add_event(self, event: EventLine) -> None:
         """Add an event to the tail, maintaining max size."""
         events_copy = deque(self.events)
-        events_copy.append(event_str)
+        events_copy.append(event)
         if len(events_copy) > self.max_events:
             events_copy.popleft()
         self.events = events_copy
@@ -306,7 +327,7 @@ class WatchApp(App[None]):
         self.messages: list[MessageLink] = []
         self.stats = SessionStats()
         self.last_position = 0
-        self.event_lines: deque[str] = deque(maxlen=100)
+        self.event_lines: deque[EventLine] = deque(maxlen=100)
 
         # Debouncing
         self.pending_update = False
@@ -526,8 +547,7 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = "responded"
 
-            display_content = content.replace("\n", " ")
-            self._add_event_line(f"[green]{agent_name}[/green]: {display_content}")
+            self._add_content_event(f"[green]{agent_name}[/green]:", content)
 
         elif event_type == "cli_text_chunk":
             agent_name = event_dict["agent"]
@@ -535,8 +555,7 @@ class WatchApp(App[None]):
             if agent_name in self.agents:
                 self.agents[agent_name].current_activity = "responding"
 
-            display_text = text.replace("\n", " ")
-            self._add_event_line(f"[green]{agent_name}[/green]: {display_text}")
+            self._add_content_event(f"[green]{agent_name}[/green]:", text)
 
         elif event_type == "cli_tool_call":
             agent_name = event_dict["agent"]
@@ -583,8 +602,12 @@ class WatchApp(App[None]):
                 self._add_event_line(f"[bold cyan]Loop {iteration} ended[/bold cyan]")
 
     def _add_event_line(self, event_str: str) -> None:
-        """Add an event line to the latest panel."""
-        self.event_lines.append(event_str)
+        """Add a plain event line to the latest panel."""
+        self.event_lines.append(EventLine(text=event_str))
+
+    def _add_content_event(self, prefix: str, content: str) -> None:
+        """Add a content event with markdown rendering."""
+        self.event_lines.append(EventLine(text=prefix, markdown=content))
 
     def _update_ui(self) -> None:
         """Update all UI panels (debounced)."""
