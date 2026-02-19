@@ -392,6 +392,7 @@ class LLMAgent:
                     _MAX_RETRIES,
                     safe_error,
                 )
+
                 self._recorder.record(
                     ErrorEvent(
                         ts="",

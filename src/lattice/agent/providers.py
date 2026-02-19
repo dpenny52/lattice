@@ -230,9 +230,33 @@ class OpenAIProvider:
             for t in tools
         ]
 
+        # Translate internal message format to OpenAI's expected structure.
+        # Tool calls need nested "function" wrappers, and arguments must be
+        # JSON strings rather than dicts.
+        api_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                translated = {k: v for k, v in msg.items() if k != "tool_calls"}
+                translated["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["arguments"])
+                            if isinstance(tc["arguments"], dict)
+                            else tc["arguments"],
+                        },
+                    }
+                    for tc in msg["tool_calls"]
+                ]
+                api_messages.append(translated)
+            else:
+                api_messages.append(msg)
+
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": api_messages,
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens

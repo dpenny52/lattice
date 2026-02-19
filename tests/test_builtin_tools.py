@@ -80,6 +80,7 @@ class TestToolSchemas:
             "web-search",
             "file-read",
             "file-write",
+            "list-dir",
             "code-exec",
         }
 

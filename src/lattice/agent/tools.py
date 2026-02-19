@@ -14,6 +14,7 @@ from lattice.agent.builtin_tools import (
     handle_code_exec,
     handle_file_read,
     handle_file_write,
+    handle_list_dir,
     handle_web_search,
 )
 from lattice.session.models import ToolCallEvent, ToolResultEvent
@@ -92,6 +93,9 @@ class ToolRegistry:
                 args, self._working_dir, self._allowed_paths
             ),
             "file-write": lambda args: handle_file_write(
+                args, self._working_dir, self._allowed_paths
+            ),
+            "list-dir": lambda args: handle_list_dir(
                 args, self._working_dir, self._allowed_paths
             ),
             "code-exec": lambda args: handle_code_exec(args),

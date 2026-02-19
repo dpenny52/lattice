@@ -72,6 +72,25 @@ FILE_WRITE_TOOL: dict[str, Any] = {
     },
 }
 
+LIST_DIR_TOOL: dict[str, Any] = {
+    "name": "list-dir",
+    "description": (
+        "List the contents of a directory."
+        " Returns file/subdirectory names with type indicators."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Path to the directory to list (relative to cwd, defaults to '.')"
+                ),
+            },
+        },
+    },
+}
+
 CODE_EXEC_TOOL: dict[str, Any] = {
     "name": "code-exec",
     "description": "Execute a Python code snippet in a subprocess.",
@@ -96,6 +115,7 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web-search": WEB_SEARCH_TOOL,
     "file-read": FILE_READ_TOOL,
     "file-write": FILE_WRITE_TOOL,
+    "list-dir": LIST_DIR_TOOL,
     "code-exec": CODE_EXEC_TOOL,
 }
 
@@ -279,6 +299,30 @@ async def handle_file_write(
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(content, encoding="utf-8")
     return json.dumps({"path": path_str, "bytes_written": len(content.encode("utf-8"))})
+
+
+async def handle_list_dir(
+    arguments: dict[str, Any],
+    working_dir: Path,
+    allowed_paths: list[Path] | None = None,
+) -> str:
+    """List the contents of a directory."""
+    path_str = arguments.get("path", ".")
+    resolved = _validate_path(path_str, working_dir, allowed_paths)
+
+    if not resolved.exists():
+        msg = f"Directory not found: {path_str}"
+        raise FileNotFoundError(msg)
+    if not resolved.is_dir():
+        msg = f"Not a directory: {path_str}"
+        raise ValueError(msg)
+
+    entries = []
+    for child in sorted(resolved.iterdir()):
+        entry_type = "dir" if child.is_dir() else "file"
+        entries.append({"name": child.name, "type": entry_type})
+
+    return json.dumps({"path": path_str, "entries": entries})
 
 
 async def handle_code_exec(arguments: dict[str, Any]) -> str:
